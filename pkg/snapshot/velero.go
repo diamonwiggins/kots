@@ -7,6 +7,7 @@ import (
 	"regexp"
 
 	"github.com/pkg/errors"
+	"github.com/replicatedhq/kots/pkg/kotsadm"
 	kotsadmtypes "github.com/replicatedhq/kots/pkg/kotsadm/types"
 	kotsadmversion "github.com/replicatedhq/kots/pkg/kotsadm/version"
 	"github.com/replicatedhq/kots/pkg/kotsutil"
@@ -134,6 +135,10 @@ func ConfigureVeleroDeployment(ctx context.Context, clientset kubernetes.Interfa
 	veleroImage, pluginImage, imagePullSecrets, err := rewriteVeleroImages(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions)
 	if err != nil {
 		return errors.Wrap(err, "failed to rewrite images")
+	}
+
+	if err := kotsadm.EnsurePrivateKotsadmRegistrySecret(veleroNamespace, kotsadmRegistryOptions, clientset); err != nil {
+		return errors.Wrap(err, "failed to ensure private kotsadm registry secret")
 	}
 
 	d, err := clientset.AppsV1().Deployments(veleroNamespace).Get(ctx, veleroDeploymentName, metav1.GetOptions{})

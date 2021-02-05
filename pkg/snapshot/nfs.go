@@ -18,6 +18,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
+	"github.com/replicatedhq/kots/pkg/kotsadm"
 	kotsadmtypes "github.com/replicatedhq/kots/pkg/kotsadm/types"
 	kotsadmversion "github.com/replicatedhq/kots/pkg/kotsadm/version"
 	"github.com/replicatedhq/kots/pkg/kotsutil"
@@ -58,6 +59,12 @@ func (e ResetNFSError) Error() string {
 }
 
 func DeployNFSMinio(ctx context.Context, clientset kubernetes.Interface, deployOptions NFSDeployOptions, registryOptions kotsadmtypes.KotsadmOptions) error {
+	// nfs minio can be deployed before installing kotsadm or the application (e.g. disaster recovery)
+	err := kotsadm.EnsurePrivateKotsadmRegistrySecret(deployOptions.Namespace, registryOptions, clientset)
+	if err != nil {
+		return errors.Wrap(err, "failed to ensure private kotsadm registry secret")
+	}
+
 	// configure NFS mount
 	shouldReset, hasMinioConfig, err := shouldResetNFSMount(ctx, clientset, deployOptions, registryOptions)
 	if err != nil {
