@@ -144,17 +144,61 @@ func (h *Handler) ConfigureNFSSnapshots(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	nfsStore, err := kotssnapshot.BuildNFSStore(clientset, namespace)
+	veleroNamespace, err := kotssnapshot.DetectVeleroNamespace()
 	if err != nil {
-		errMsg := "failed to build nfs store"
+		errMsg := "failed to detect velero namespace"
 		response.Error = errMsg
 		logger.Error(errors.Wrap(err, errMsg))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
 
-	if err := kotssnapshot.InstallVeleroFromNFSStore(nfsStore, registryOptions); err != nil {
-		errMsg := "failed to install velero"
+	if veleroNamespace == "" {
+		// velero not found, install and configure velero
+
+		nfsStore, err := kotssnapshot.BuildNFSStore(r.Context(), clientset, namespace)
+		if err != nil {
+			errMsg := "failed to build nfs store"
+			response.Error = errMsg
+			logger.Error(errors.Wrap(err, errMsg))
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		if err := kotssnapshot.InstallVeleroFromNFSStore(r.Context(), clientset, nfsStore, namespace, registryOptions); err != nil {
+			errMsg := "failed to install velero"
+			response.Error = errMsg
+			logger.Error(errors.Wrap(err, errMsg))
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		response.Success = true
+		response.Namespace = namespace
+		response.IsMinimalRBACEnabled = false
+
+		JSON(w, http.StatusOK, response)
+		return
+	}
+
+	// velero is already installed, only configure velero deployment and the store
+
+	err = kotssnapshot.ConfigureVeleroDeployment(r.Context(), clientset, namespace, registryOptions)
+	if err != nil {
+		errMsg := "failed to configure velero deployment"
+		response.Error = errMsg
+		logger.Error(errors.Wrap(err, errMsg))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	configureStoreOptions := kotssnapshot.ConfigureStoreOptions{
+		NFS:              true,
+		KotsadmNamespace: namespace,
+	}
+	_, err = kotssnapshot.ConfigureStore(configureStoreOptions)
+	if err != nil {
+		errMsg := "failed to configure store"
 		response.Error = errMsg
 		logger.Error(errors.Wrap(err, errMsg))
 		w.WriteHeader(http.StatusInternalServerError)
@@ -269,7 +313,7 @@ func (h *Handler) UpdateGlobalSnapshotSettings(w http.ResponseWriter, r *http.Re
 		Internal: updateGlobalSnapshotSettingsRequest.Internal,
 		NFS:      updateGlobalSnapshotSettingsRequest.NFS != nil,
 
-		KOTSNamespace: os.Getenv("POD_NAMESPACE"),
+		KotsadmNamespace: os.Getenv("POD_NAMESPACE"),
 	}
 	updatedStore, err := kotssnapshot.ConfigureStore(options)
 	if err != nil {

@@ -46,7 +46,7 @@ type ConfigureStoreOptions struct {
 	Internal bool
 	NFS      bool
 
-	KOTSNamespace string
+	KotsadmNamespace string
 }
 
 type InvalidStoreDataError struct {
@@ -264,7 +264,7 @@ func ConfigureStore(options ConfigureStoreOptions) (*types.Store, error) {
 			return nil, errors.Wrap(err, "failed to create clientset")
 		}
 
-		nfsStore, err := BuildNFSStore(clientset, options.KOTSNamespace)
+		nfsStore, err := BuildNFSStore(context.TODO(), clientset, options.KotsadmNamespace)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to build nfs store")
 		}
@@ -831,13 +831,13 @@ func FindBackupStoreLocation() (*velerov1.BackupStorageLocation, error) {
 	return nil, errors.New("global config not found")
 }
 
-func BuildNFSStore(clientset kubernetes.Interface, kotsNamespace string) (*types.StoreNFS, error) {
-	secret, err := clientset.CoreV1().Secrets(kotsNamespace).Get(context.TODO(), NFSMinioSecretName, metav1.GetOptions{})
+func BuildNFSStore(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string) (*types.StoreNFS, error) {
+	secret, err := clientset.CoreV1().Secrets(kotsadmNamespace).Get(ctx, NFSMinioSecretName, metav1.GetOptions{})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get nfs minio secret")
 	}
 
-	service, err := clientset.CoreV1().Services(kotsNamespace).Get(context.TODO(), NFSMinioServiceName, metav1.GetOptions{})
+	service, err := clientset.CoreV1().Services(kotsadmNamespace).Get(ctx, NFSMinioServiceName, metav1.GetOptions{})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get nfs minio service")
 	}
@@ -845,7 +845,7 @@ func BuildNFSStore(clientset kubernetes.Interface, kotsNamespace string) (*types
 	nfsStore := types.StoreNFS{}
 	nfsStore.AccessKeyID = string(secret.Data["MINIO_ACCESS_KEY"])
 	nfsStore.SecretAccessKey = string(secret.Data["MINIO_SECRET_KEY"])
-	nfsStore.Endpoint = fmt.Sprintf("http://%s.%s:%d", NFSMinioServiceName, kotsNamespace, service.Spec.Ports[0].Port)
+	nfsStore.Endpoint = fmt.Sprintf("http://%s.%s:%d", NFSMinioServiceName, kotsadmNamespace, service.Spec.Ports[0].Port)
 	nfsStore.ObjectStoreClusterIP = service.Spec.ClusterIP
 	nfsStore.Region = NFSMinioRegion
 

@@ -115,12 +115,12 @@ func BackupConfigureNFSCmd() *cobra.Command {
 
 				log.ActionWithoutSpinner("Installing and configuring Velero")
 
-				nfsStore, err := snapshot.BuildNFSStore(clientset, namespace)
+				nfsStore, err := snapshot.BuildNFSStore(cmd.Context(), clientset, namespace)
 				if err != nil {
 					return errors.Wrap(err, "failed to build nfs store")
 				}
 
-				if err := snapshot.InstallVeleroFromNFSStore(nfsStore, *registryOptions); err != nil {
+				if err := snapshot.InstallVeleroFromNFSStore(cmd.Context(), clientset, nfsStore, namespace, *registryOptions); err != nil {
 					return errors.Wrap(err, "failed to install velero")
 				}
 
@@ -131,15 +131,15 @@ func BackupConfigureNFSCmd() *cobra.Command {
 
 			log.ActionWithSpinner("Configuring Velero")
 
-			_, err = snapshot.GetGlobalStore(nil)
+			err = snapshot.ConfigureVeleroDeployment(cmd.Context(), clientset, namespace, *registryOptions)
 			if err != nil {
 				log.FinishSpinnerWithError()
-				return errors.Wrap(err, "failed to get global store")
+				return errors.Wrap(err, "failed to configure velero deployment")
 			}
 
 			configureStoreOptions := snapshot.ConfigureStoreOptions{
-				NFS:           true,
-				KOTSNamespace: namespace,
+				NFS:              true,
+				KotsadmNamespace: namespace,
 			}
 			_, err = snapshot.ConfigureStore(configureStoreOptions)
 			if err != nil {

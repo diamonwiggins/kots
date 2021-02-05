@@ -8,6 +8,8 @@ import (
 
 	"github.com/pkg/errors"
 	kotsadmtypes "github.com/replicatedhq/kots/pkg/kotsadm/types"
+	kotsadmversion "github.com/replicatedhq/kots/pkg/kotsadm/version"
+	"github.com/replicatedhq/kots/pkg/kotsutil"
 	"github.com/replicatedhq/kots/pkg/snapshot/types"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/client"
@@ -15,6 +17,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/install"
 	kubeutil "github.com/vmware-tanzu/velero/pkg/util/kube"
 	v1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	kuberneteserrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -26,8 +29,14 @@ var (
 	dockerImageNameRegex = regexp.MustCompile("(?:([^\\/]+)\\/)?(?:([^\\/]+)\\/)?([^@:\\/]+)(?:[@:](.+))")
 )
 
+const (
+	veleroNamespace             = velerov1api.DefaultNamespace
+	veleroDeploymentName        = "velero"
+	defaultVeleroImage          = "velero/velero:v1.5.1"
+	defaultVeleroAWSPluginImage = "velero/velero-plugin-for-aws:v1.1.0"
+)
+
 type VeleroInstallOptions struct {
-	Plugins              []string
 	ProviderName         string
 	BucketName           string
 	Prefix               string
@@ -46,9 +55,11 @@ type VeleroStatus struct {
 	ResticStatus  string
 }
 
-func InstallVelero(opts VeleroInstallOptions, registryOptions kotsadmtypes.KotsadmOptions) error {
-	image := install.DefaultImage // TODO don't use latest and handle the other image in the init container as well
-	// TODO NOW handle image pull secret option in velero when rewriting image
+func InstallVelero(ctx context.Context, clientset kubernetes.Interface, veleroInstallOptions VeleroInstallOptions, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) error {
+	veleroImage, pluginImage, _, err := rewriteVeleroImages(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions)
+	if err != nil {
+		return errors.Wrap(err, "failed to rewrite images")
+	}
 
 	veleroPodResources, err := kubeutil.ParseResourceRequirements(install.DefaultVeleroPodCPURequest, install.DefaultVeleroPodMemRequest, install.DefaultVeleroPodCPULimit, install.DefaultVeleroPodMemLimit)
 	if err != nil {
@@ -60,19 +71,19 @@ func InstallVelero(opts VeleroInstallOptions, registryOptions kotsadmtypes.Kotsa
 	}
 
 	vo := &install.VeleroOptions{
-		Namespace:               velerov1api.DefaultNamespace,
-		Image:                   image,
-		ProviderName:            opts.ProviderName,
-		Bucket:                  opts.BucketName,
-		Prefix:                  opts.Prefix,
+		Namespace:               veleroNamespace,
+		Image:                   veleroImage,
+		ProviderName:            veleroInstallOptions.ProviderName,
+		Bucket:                  veleroInstallOptions.BucketName,
+		Prefix:                  veleroInstallOptions.Prefix,
 		VeleroPodResources:      veleroPodResources,
 		ResticPodResources:      resticPodResources,
-		SecretData:              opts.SecretData,
+		SecretData:              veleroInstallOptions.SecretData,
 		UseRestic:               true,
 		UseVolumeSnapshots:      true,
-		BSLConfig:               opts.BackupStorageConfig,
-		VSLConfig:               opts.VolumeSnapshotConfig,
-		Plugins:                 opts.Plugins,
+		BSLConfig:               veleroInstallOptions.BackupStorageConfig,
+		VSLConfig:               veleroInstallOptions.VolumeSnapshotConfig,
+		Plugins:                 []string{pluginImage},
 		NoDefaultBackupLocation: false,
 		DefaultVolumesToRestic:  true,
 	}
@@ -87,27 +98,30 @@ func InstallVelero(opts VeleroInstallOptions, registryOptions kotsadmtypes.Kotsa
 
 	dynamicClient, err := f.DynamicClient()
 	if err != nil {
-		return err
+		return errors.Wrap(err, "failed to get dynamic client")
 	}
 	factory := client.NewDynamicFactory(dynamicClient)
 
-	errorMsg := fmt.Sprintf("\n\nError installing Velero. Use `kubectl logs deploy/velero -n %s` to check the deploy logs", velerov1api.DefaultNamespace)
+	errorMsg := fmt.Sprintf("\n\nError installing Velero. Use `kubectl logs deploy/velero -n %s` to check the deploy logs", veleroNamespace)
 
 	err = install.Install(factory, resources, os.Stdout)
 	if err != nil {
 		return errors.Wrap(err, errorMsg)
 	}
 
-	// TODO NOW: patch velero deployment to include imagepullsecret in existing airgap
+	// this is necessary to add/remove the imagePullSecrets and to update the images in case the deployment has been previously created
+	if err := ConfigureVeleroDeployment(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions); err != nil {
+		return errors.Wrap(err, "failed to configure velero deployment")
+	}
 
-	if opts.Wait {
+	if veleroInstallOptions.Wait {
 		fmt.Println("Waiting for Velero deployment to be ready.")
-		if _, err = install.DeploymentIsReady(factory, velerov1api.DefaultNamespace); err != nil {
+		if _, err = install.DeploymentIsReady(factory, veleroNamespace); err != nil {
 			return errors.Wrap(err, errorMsg)
 		}
 
 		fmt.Println("Waiting for Velero restic daemonset to be ready.")
-		if _, err = install.DaemonSetIsReady(factory, velerov1api.DefaultNamespace); err != nil {
+		if _, err = install.DaemonSetIsReady(factory, veleroNamespace); err != nil {
 			return errors.Wrap(err, errorMsg)
 		}
 	}
@@ -115,7 +129,54 @@ func InstallVelero(opts VeleroInstallOptions, registryOptions kotsadmtypes.Kotsa
 	return nil
 }
 
-func InstallVeleroFromNFSStore(nfsStore *types.StoreNFS, registryOptions kotsadmtypes.KotsadmOptions) error {
+// ConfigureVeleroDeployment will rewrite velero images based on the provided kotsadm registry options and will also add/remove imagePullSecrets if necessary
+func ConfigureVeleroDeployment(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) error {
+	veleroImage, pluginImage, imagePullSecrets, err := rewriteVeleroImages(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions)
+	if err != nil {
+		return errors.Wrap(err, "failed to rewrite images")
+	}
+
+	d, err := clientset.AppsV1().Deployments(veleroNamespace).Get(ctx, veleroDeploymentName, metav1.GetOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to get velero deployment")
+	}
+
+	d.Spec.Template.Spec.ImagePullSecrets = imagePullSecrets
+	d.Spec.Template.Spec.InitContainers[0].Image = pluginImage
+	d.Spec.Template.Spec.Containers[0].Image = veleroImage
+
+	_, err = clientset.AppsV1().Deployments(veleroNamespace).Update(ctx, d, metav1.UpdateOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to update velero deployment")
+	}
+
+	return nil
+}
+
+func rewriteVeleroImages(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) (veleroImage string, pluginImage string, imagePullSecrets []corev1.LocalObjectReference, finalErr error) {
+	veleroImage = defaultVeleroImage
+	pluginImage = defaultVeleroAWSPluginImage
+	imagePullSecrets = []corev1.LocalObjectReference{}
+
+	if !kotsutil.IsKurl(clientset) || kotsadmNamespace != metav1.NamespaceDefault {
+		var err error
+		imageRewriteFn := kotsadmversion.ImageRewriteKotsadmRegistry(kotsadmNamespace, &kotsadmRegistryOptions)
+		veleroImage, imagePullSecrets, err = imageRewriteFn(veleroImage, false)
+		if err != nil {
+			finalErr = errors.Wrap(err, "failed to rewrite velero image")
+			return
+		}
+		pluginImage, _, err = imageRewriteFn(pluginImage, false)
+		if err != nil {
+			finalErr = errors.Wrap(err, "failed to rewrite plugin image")
+			return
+		}
+	}
+
+	return
+}
+
+func InstallVeleroFromNFSStore(ctx context.Context, clientset kubernetes.Interface, nfsStore *types.StoreNFS, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) error {
 	nfsCreds, err := FormatAWSCredentials(nfsStore.AccessKeyID, nfsStore.SecretAccessKey)
 	if err != nil {
 		return errors.Wrap(err, "failed to format credentials")
@@ -123,8 +184,7 @@ func InstallVeleroFromNFSStore(nfsStore *types.StoreNFS, registryOptions kotsadm
 
 	publicURL := fmt.Sprintf("http://%s:%d", nfsStore.ObjectStoreClusterIP, NFSMinioServicePort)
 
-	opts := VeleroInstallOptions{
-		Plugins:      []string{"velero/velero-plugin-for-aws:v1.1.0"},
+	veleroInstallOptions := VeleroInstallOptions{
 		ProviderName: NFSMinioProvider,
 		BucketName:   NFSMinioBucketName,
 		SecretData:   nfsCreds,
@@ -140,7 +200,7 @@ func InstallVeleroFromNFSStore(nfsStore *types.StoreNFS, registryOptions kotsadm
 		Wait: true,
 	}
 
-	return InstallVelero(opts, registryOptions)
+	return InstallVelero(ctx, clientset, veleroInstallOptions, kotsadmNamespace, kotsadmRegistryOptions)
 }
 
 func DetectVeleroNamespace() (string, error) {
