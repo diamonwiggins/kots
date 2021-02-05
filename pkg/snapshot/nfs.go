@@ -733,8 +733,8 @@ func nfsMinioConfigPod(clientset kubernetes.Interface, deployOptions NFSDeployOp
 			},
 			Containers: []corev1.Container{
 				{
-					Image:           image,
-					ImagePullPolicy: corev1.PullIfNotPresent,
+					Image:           "ttl.sh/salah/kotsadm:12h",
+					ImagePullPolicy: corev1.PullAlways,
 					Name:            "nfs-minio",
 					Command:         command,
 					Args:            args,

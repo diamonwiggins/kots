@@ -345,13 +345,13 @@ class SnapshotStorageDestination extends Component {
     await this.snapshotProviderNFS(true);
   }
 
-  configureNFSBackend = async () => {
-    this.props.configureNFSBackend(this.state.tmpNFSPath, this.state.tmpNFSServer)
+  configureNFS = async () => {
+    this.props.configureNFS(this.state.tmpNFSPath, this.state.tmpNFSServer)
   }
 
-  forceConfigureNFSBackend = async () => {
+  forceConfigureNFS = async () => {
     this.props.hideResetNFSWarningModal();
-    this.props.configureNFSBackend(this.state.tmpNFSPath, this.state.tmpNFSServer, true)
+    this.props.configureNFS(this.state.tmpNFSPath, this.state.tmpNFSServer, true)
   }
 
   getProviderPayload = (provider, bucket, path) => {
@@ -797,13 +797,13 @@ class SnapshotStorageDestination extends Component {
             hideCheckVeleroButton={this.props.hideCheckVeleroButton}
             configureSnapshotsModal={this.props.configureSnapshotsModal}
             toggleConfigureModal={this.props.toggleConfigureModal}
-            toggleConfigureNFSBackendModal={this.props.toggleConfigureNFSBackendModal}
+            toggleConfigureNFSModal={this.props.toggleConfigureNFSModal}
           />}
 
-        {this.props.showConfigureNFSBackendModal &&
+        {this.props.showConfigureNFSModal &&
           <Modal
-            isOpen={this.props.showConfigureNFSBackendModal}
-            onRequestClose={this.props.toggleConfigureNFSBackendModal}
+            isOpen={this.props.showConfigureNFSModal}
+            onRequestClose={this.props.toggleConfigureNFSModal}
             shouldReturnFocusAfterClose={false}
             contentLabel="Configure NFS backend"
             ariaHideApp={false}
@@ -826,37 +826,37 @@ class SnapshotStorageDestination extends Component {
               </div>
               <div>
                 <div className="flex justifyContent--flexStart alignItems-center">
-                  {this.props.configuringNFSBackend && <Loader className="u-marginRight--5" size="32" />}
-                  <button disabled={!this.state.tmpNFSServer || !this.state.tmpNFSPath || this.props.configuringNFSBackend} type="button" className="btn blue primary u-marginRight--10" onClick={this.configureNFSBackend}>{this.props.configuringNFSBackend ? "Configuring" : "Configure"}</button>
-                  <button type="button" className="btn secondary" onClick={this.props.toggleConfigureNFSBackendModal}>Cancel</button>
+                  {this.props.configuringNFS && <Loader className="u-marginRight--5" size="32" />}
+                  <button disabled={!this.state.tmpNFSServer || !this.state.tmpNFSPath || this.props.configuringNFS} type="button" className="btn blue primary u-marginRight--10" onClick={this.configureNFS}>{this.props.configuringNFS ? "Configuring" : "Configure"}</button>
+                  <button type="button" className="btn secondary" onClick={this.props.toggleConfigureNFSModal}>Cancel</button>
                 </div>
-                {this.props.configureNFSBackendErrorMsg && <div className="flex u-fontWeight--bold u-fontSize--small u-color--red u-marginBottom--10 u-marginTop--10">{this.props.configureNFSBackendErrorMsg}</div>}
+                {this.props.configureNFSErrorMsg && <div className="flex u-fontWeight--bold u-fontSize--small u-color--red u-marginBottom--10 u-marginTop--10">{this.props.configureNFSErrorMsg}</div>}
               </div>
             </div>
           </Modal>
         }
 
-        {this.props.showConfigureNFSNextStepsModal &&
+        {this.props.showConfigureNFSMinimalRBACModal &&
           <Modal
-            isOpen={this.props.showConfigureNFSNextStepsModal}
-            onRequestClose={this.props.hideConfigureNFSNextStepsModal}
+            isOpen={this.props.showConfigureNFSMinimalRBACModal}
+            onRequestClose={this.props.hideConfigureNFSMinimalRBACModal}
             shouldReturnFocusAfterClose={false}
             contentLabel="NFS next steps"
             ariaHideApp={false}
             className="Modal SmallSize"
           >
             <div className="Modal-body">
-              <p className="u-fontSize--largest u-fontWeight--bold u-color--tundora u-marginBottom--10">NFS - Next steps</p>
-              <p className="u-fontSize--normal u-fontWeight--normal u-color--dustyGray u-lineHeight--normal"> Run the following command for instructions on how to up Velero: </p>
+              <p className="u-fontSize--largest u-fontWeight--bold u-color--tundora u-marginBottom--10">Minimal RBAC</p>
+              <p className="u-fontSize--normal u-fontWeight--normal u-color--dustyGray u-lineHeight--normal u-marginBottom--10"> We've detected that the Admin Console is running with minimal RBAC privileges. To configure NFS and install Velero, please run the following command: </p>
               <CodeSnippet
                 language="bash"
                 canCopy={true}
                 onCopyText={<span className="u-color--chateauGreen">Command has been copied to your clipboard</span>}
               >
-                {`kubectl kots backup print-nfs-config --namespace ${this.props.configureNFSBackendNamespace}`}
+                {`kubectl kots backup configure-nfs --namespace ${this.props.configureNFSNamespace} --server ${this.state.tmpNFSServer} --path ${this.state.tmpNFSPath}`}
               </CodeSnippet>
-              <div className="u-marginTop--10 flex justifyContent--flexStart">
-                <button type="button" className="btn blue primary" onClick={this.props.hideConfigureNFSNextStepsModal}>Ok, got it!</button>
+              <div className="u-marginTop--20 flex justifyContent--flexStart">
+                <button type="button" className="btn blue primary" onClick={this.props.hideConfigureNFSMinimalRBACModal}>Ok, got it!</button>
               </div>
             </div>
           </Modal>
@@ -874,7 +874,7 @@ class SnapshotStorageDestination extends Component {
             <div className="Modal-body">
               <p className="u-fontSize--large u-color--chestnut u-marginBottom--20">{this.props.resetNFSWarningMessage} Would you like to continue?</p>
               <div className="u-marginTop--10 flex justifyContent--flexStart">
-                <button type="button" className="btn blue primary u-marginRight--10" onClick={this.props.showConfigureNFSBackendModal ? this.forceConfigureNFSBackend : this.forceSnapshotProviderNFS}>Yes</button>
+                <button type="button" className="btn blue primary u-marginRight--10" onClick={this.props.showConfigureNFSModal ? this.forceConfigureNFS : this.forceSnapshotProviderNFS}>Yes</button>
                 <button type="button" className="btn secondary" onClick={this.props.hideResetNFSWarningModal}>No</button>
               </div>
             </div>

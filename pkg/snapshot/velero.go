@@ -8,6 +8,7 @@ import (
 
 	"github.com/pkg/errors"
 	kotsadmtypes "github.com/replicatedhq/kots/pkg/kotsadm/types"
+	"github.com/replicatedhq/kots/pkg/snapshot/types"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/client"
 	veleroclientv1 "github.com/vmware-tanzu/velero/pkg/generated/clientset/versioned/typed/velero/v1"
@@ -46,7 +47,7 @@ type VeleroStatus struct {
 }
 
 func InstallVelero(opts VeleroInstallOptions, registryOptions kotsadmtypes.KotsadmOptions) error {
-	image := install.DefaultImage
+	image := install.DefaultImage // TODO don't use latest and handle the other image in the init container as well
 	// TODO NOW handle image pull secret option in velero when rewriting image
 
 	veleroPodResources, err := kubeutil.ParseResourceRequirements(install.DefaultVeleroPodCPURequest, install.DefaultVeleroPodMemRequest, install.DefaultVeleroPodCPULimit, install.DefaultVeleroPodMemLimit)
@@ -112,6 +113,34 @@ func InstallVelero(opts VeleroInstallOptions, registryOptions kotsadmtypes.Kotsa
 	}
 
 	return nil
+}
+
+func InstallVeleroFromNFSStore(nfsStore *types.StoreNFS, registryOptions kotsadmtypes.KotsadmOptions) error {
+	nfsCreds, err := FormatAWSCredentials(nfsStore.AccessKeyID, nfsStore.SecretAccessKey)
+	if err != nil {
+		return errors.Wrap(err, "failed to format credentials")
+	}
+
+	publicURL := fmt.Sprintf("http://%s:%d", nfsStore.ObjectStoreClusterIP, NFSMinioServicePort)
+
+	opts := VeleroInstallOptions{
+		Plugins:      []string{"velero/velero-plugin-for-aws:v1.1.0"},
+		ProviderName: NFSMinioProvider,
+		BucketName:   NFSMinioBucketName,
+		SecretData:   nfsCreds,
+		BackupStorageConfig: map[string]string{
+			"region":           NFSMinioRegion,
+			"s3ForcePathStyle": "true",
+			"s3Url":            nfsStore.Endpoint,
+			"publicUrl":        publicURL,
+		},
+		VolumeSnapshotConfig: map[string]string{
+			"region": NFSMinioRegion,
+		},
+		Wait: true,
+	}
+
+	return InstallVelero(opts, registryOptions)
 }
 
 func DetectVeleroNamespace() (string, error) {

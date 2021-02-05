@@ -921,16 +921,16 @@ func (mr *MockKOTSHandlerMockRecorder) UpdateGlobalSnapshotSettings(w, r interfa
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "UpdateGlobalSnapshotSettings", reflect.TypeOf((*MockKOTSHandler)(nil).UpdateGlobalSnapshotSettings), w, r)
 }
 
-// ConfigureNFSSnapshotsBackend mocks base method
-func (m *MockKOTSHandler) ConfigureNFSSnapshotsBackend(w http.ResponseWriter, r *http.Request) {
+// ConfigureNFSSnapshots mocks base method
+func (m *MockKOTSHandler) ConfigureNFSSnapshots(w http.ResponseWriter, r *http.Request) {
 	m.ctrl.T.Helper()
-	m.ctrl.Call(m, "ConfigureNFSSnapshotsBackend", w, r)
+	m.ctrl.Call(m, "ConfigureNFSSnapshots", w, r)
 }
 
-// ConfigureNFSSnapshotsBackend indicates an expected call of ConfigureNFSSnapshotsBackend
-func (mr *MockKOTSHandlerMockRecorder) ConfigureNFSSnapshotsBackend(w, r interface{}) *gomock.Call {
+// ConfigureNFSSnapshots indicates an expected call of ConfigureNFSSnapshots
+func (mr *MockKOTSHandlerMockRecorder) ConfigureNFSSnapshots(w, r interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfigureNFSSnapshotsBackend", reflect.TypeOf((*MockKOTSHandler)(nil).ConfigureNFSSnapshotsBackend), w, r)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ConfigureNFSSnapshots", reflect.TypeOf((*MockKOTSHandler)(nil).ConfigureNFSSnapshots), w, r)
 }
 
 // GetBackup mocks base method

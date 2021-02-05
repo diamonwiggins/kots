@@ -1,8 +1,6 @@
 package snapshot
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"net/url"
@@ -353,29 +351,9 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 				}
 			}
 		} else {
-			awsCfg := ini.Empty()
-			section, err := awsCfg.NewSection("default")
+			awsCredentials, err := FormatAWSCredentials(store.AWS.AccessKeyID, store.AWS.SecretAccessKey)
 			if err != nil {
-				return nil, errors.Wrap(err, "failed to create default section in aws creds")
-			}
-			_, err = section.NewKey("aws_access_key_id", store.AWS.AccessKeyID)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to create access key")
-			}
-
-			_, err = section.NewKey("aws_secret_access_key", store.AWS.SecretAccessKey)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to create secret access key")
-			}
-
-			var awsCredentials bytes.Buffer
-			writer := bufio.NewWriter(&awsCredentials)
-			_, err = awsCfg.WriteTo(writer)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to write ini")
-			}
-			if err := writer.Flush(); err != nil {
-				return nil, errors.Wrap(err, "failed to flush buffer")
+				return nil, errors.Wrap(err, "failed to format aws credentials")
 			}
 
 			// create or update the secret
@@ -391,7 +369,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 						Namespace: kotsadmVeleroBackendStorageLocation.Namespace,
 					},
 					Data: map[string][]byte{
-						"cloud": awsCredentials.Bytes(),
+						"cloud": awsCredentials,
 					},
 				}
 				_, err = clientset.CoreV1().Secrets(kotsadmVeleroBackendStorageLocation.Namespace).Create(context.TODO(), &toCreate, metav1.CreateOptions{})
@@ -404,7 +382,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 					currentSecret.Data = map[string][]byte{}
 				}
 
-				currentSecret.Data["cloud"] = awsCredentials.Bytes()
+				currentSecret.Data["cloud"] = awsCredentials
 				_, err = clientset.CoreV1().Secrets(kotsadmVeleroBackendStorageLocation.Namespace).Update(context.TODO(), currentSecret, metav1.UpdateOptions{})
 				if err != nil {
 					return nil, errors.Wrap(err, "failed to update aws secret")
@@ -418,29 +396,9 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 			"s3ForcePathStyle": "true",
 		}
 
-		otherCfg := ini.Empty()
-		section, err := otherCfg.NewSection("default")
+		otherCredentials, err := FormatAWSCredentials(store.Other.AccessKeyID, store.Other.SecretAccessKey)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to create default section in other creds")
-		}
-		_, err = section.NewKey("aws_access_key_id", store.Other.AccessKeyID)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create other access key id")
-		}
-
-		_, err = section.NewKey("aws_secret_access_key", store.Other.SecretAccessKey)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create other secret access key")
-		}
-
-		var otherCredentials bytes.Buffer
-		writer := bufio.NewWriter(&otherCredentials)
-		_, err = otherCfg.WriteTo(writer)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to write ini")
-		}
-		if err := writer.Flush(); err != nil {
-			return nil, errors.Wrap(err, "failed to flush buffer")
+			return nil, errors.Wrap(err, "failed to format other credentials")
 		}
 
 		// create or update the secret
@@ -456,7 +414,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 					Namespace: kotsadmVeleroBackendStorageLocation.Namespace,
 				},
 				Data: map[string][]byte{
-					"cloud": otherCredentials.Bytes(),
+					"cloud": otherCredentials,
 				},
 			}
 			_, err = clientset.CoreV1().Secrets(kotsadmVeleroBackendStorageLocation.Namespace).Create(context.TODO(), &toCreate, metav1.CreateOptions{})
@@ -469,7 +427,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 				currentSecret.Data = map[string][]byte{}
 			}
 
-			currentSecret.Data["cloud"] = otherCredentials.Bytes()
+			currentSecret.Data["cloud"] = otherCredentials
 			_, err = clientset.CoreV1().Secrets(kotsadmVeleroBackendStorageLocation.Namespace).Update(context.TODO(), currentSecret, metav1.UpdateOptions{})
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to update other secret")
@@ -483,29 +441,9 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 			"s3ForcePathStyle": "true",
 		}
 
-		internalCfg := ini.Empty()
-		section, err := internalCfg.NewSection("default")
+		internalCredentials, err := FormatAWSCredentials(store.Internal.AccessKeyID, store.Internal.SecretAccessKey)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to create default section in internal creds")
-		}
-		_, err = section.NewKey("aws_access_key_id", store.Internal.AccessKeyID)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create internal access key id")
-		}
-
-		_, err = section.NewKey("aws_secret_access_key", store.Internal.SecretAccessKey)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create internal secret access key")
-		}
-
-		var internalCredentials bytes.Buffer
-		writer := bufio.NewWriter(&internalCredentials)
-		_, err = internalCfg.WriteTo(writer)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to write ini")
-		}
-		if err := writer.Flush(); err != nil {
-			return nil, errors.Wrap(err, "failed to flush buffer")
+			return nil, errors.Wrap(err, "failed to format internal credentials")
 		}
 
 		// create or update the secret
@@ -521,7 +459,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 					Namespace: kotsadmVeleroBackendStorageLocation.Namespace,
 				},
 				Data: map[string][]byte{
-					"cloud": internalCredentials.Bytes(),
+					"cloud": internalCredentials,
 				},
 			}
 			_, err = clientset.CoreV1().Secrets(kotsadmVeleroBackendStorageLocation.Namespace).Create(context.TODO(), &toCreate, metav1.CreateOptions{})
@@ -534,7 +472,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 				currentSecret.Data = map[string][]byte{}
 			}
 
-			currentSecret.Data["cloud"] = internalCredentials.Bytes()
+			currentSecret.Data["cloud"] = internalCredentials
 			_, err = clientset.CoreV1().Secrets(kotsadmVeleroBackendStorageLocation.Namespace).Update(context.TODO(), currentSecret, metav1.UpdateOptions{})
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to update internal secret")
@@ -548,29 +486,9 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 			"s3ForcePathStyle": "true",
 		}
 
-		nfsCfg := ini.Empty()
-		section, err := nfsCfg.NewSection("default")
+		nfsCredentials, err := FormatAWSCredentials(store.NFS.AccessKeyID, store.NFS.SecretAccessKey)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to create default section in nfs creds")
-		}
-		_, err = section.NewKey("aws_access_key_id", store.NFS.AccessKeyID)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create nfs access key id")
-		}
-
-		_, err = section.NewKey("aws_secret_access_key", store.NFS.SecretAccessKey)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create nfs secret access key")
-		}
-
-		var nfsCredentials bytes.Buffer
-		writer := bufio.NewWriter(&nfsCredentials)
-		_, err = nfsCfg.WriteTo(writer)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to write ini")
-		}
-		if err := writer.Flush(); err != nil {
-			return nil, errors.Wrap(err, "failed to flush buffer")
+			return nil, errors.Wrap(err, "failed to format nfs credentials")
 		}
 
 		// create or update the secret
@@ -586,7 +504,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 					Namespace: kotsadmVeleroBackendStorageLocation.Namespace,
 				},
 				Data: map[string][]byte{
-					"cloud": nfsCredentials.Bytes(),
+					"cloud": nfsCredentials,
 				},
 			}
 			_, err = clientset.CoreV1().Secrets(kotsadmVeleroBackendStorageLocation.Namespace).Create(context.TODO(), &toCreate, metav1.CreateOptions{})
@@ -599,7 +517,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 				currentSecret.Data = map[string][]byte{}
 			}
 
-			currentSecret.Data["cloud"] = nfsCredentials.Bytes()
+			currentSecret.Data["cloud"] = nfsCredentials
 			_, err = clientset.CoreV1().Secrets(kotsadmVeleroBackendStorageLocation.Namespace).Update(context.TODO(), currentSecret, metav1.UpdateOptions{})
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to update nfs secret")

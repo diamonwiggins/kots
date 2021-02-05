@@ -895,7 +895,7 @@ func readDeployOptionsFromCluster(namespace string, kubernetesConfigFlags *gener
 	return &deployOptions, nil
 }
 
-func GetKotsadmOptionsFromCluster(namespace string, clientset *kubernetes.Clientset) (types.KotsadmOptions, error) {
+func GetKotsadmOptionsFromCluster(namespace string, clientset kubernetes.Interface) (types.KotsadmOptions, error) {
 	kotsadmOptions := types.KotsadmOptions{}
 
 	configMap, err := clientset.CoreV1().ConfigMaps(namespace).Get(context.TODO(), types.KotsadmConfigMap, metav1.GetOptions{})

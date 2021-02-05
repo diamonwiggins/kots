@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"bufio"
-	"bytes"
 	"fmt"
 	"os"
 	"strings"
@@ -18,7 +16,6 @@ import (
 	"github.com/replicatedhq/kots/pkg/snapshot/types"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"gopkg.in/ini.v1"
 )
 
 func BackupConfigureNFSCmd() *cobra.Command {
@@ -123,30 +120,7 @@ func BackupConfigureNFSCmd() *cobra.Command {
 					return errors.Wrap(err, "failed to build nfs store")
 				}
 
-				creds, err := formatCredentials(nfsStore.AccessKeyID, nfsStore.SecretAccessKey)
-				if err != nil {
-					return errors.Wrap(err, "failed to format credentials")
-				}
-
-				publicURL := fmt.Sprintf("http://%s:%d", nfsStore.ObjectStoreClusterIP, snapshot.NFSMinioServicePort)
-
-				opts := snapshot.VeleroInstallOptions{
-					Plugins:      []string{"velero/velero-plugin-for-aws:v1.1.0"},
-					ProviderName: snapshot.NFSMinioProvider,
-					BucketName:   snapshot.NFSMinioBucketName,
-					SecretData:   creds,
-					BackupStorageConfig: map[string]string{
-						"region":           snapshot.NFSMinioRegion,
-						"s3ForcePathStyle": "true",
-						"s3Url":            nfsStore.Endpoint,
-						"publicURL":        publicURL,
-					},
-					VolumeSnapshotConfig: map[string]string{
-						"region": snapshot.NFSMinioRegion,
-					},
-					Wait: true,
-				}
-				if err := snapshot.InstallVelero(opts, *registryOptions); err != nil {
+				if err := snapshot.InstallVeleroFromNFSStore(nfsStore, *registryOptions); err != nil {
 					return errors.Wrap(err, "failed to install velero")
 				}
 
@@ -213,33 +187,4 @@ func promptForNFSReset(log *logger.Logger, warningMsg string) bool {
 			return true
 		}
 	}
-}
-
-func formatCredentials(accessKeyID, secretAccessKey string) ([]byte, error) {
-	awsCfg := ini.Empty()
-	section, err := awsCfg.NewSection("default")
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to create default section in aws creds")
-	}
-	_, err = section.NewKey("aws_access_key_id", accessKeyID)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to create access key")
-	}
-
-	_, err = section.NewKey("aws_secret_access_key", secretAccessKey)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to create secret access key")
-	}
-
-	var awsCredentials bytes.Buffer
-	writer := bufio.NewWriter(&awsCredentials)
-	_, err = awsCfg.WriteTo(writer)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to write ini")
-	}
-	if err := writer.Flush(); err != nil {
-		return nil, errors.Wrap(err, "failed to flush buffer")
-	}
-
-	return awsCredentials.Bytes(), nil
 }

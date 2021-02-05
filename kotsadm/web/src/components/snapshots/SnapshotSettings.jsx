@@ -26,11 +26,11 @@ class SnapshotSettings extends Component {
     showResetNFSWarningModal: false,
     resetNFSWarningMessage: "",
 
-    configuringNFSBackend: false,
-    configureNFSBackendErrorMsg: "",
-    configureNFSBackendNamespace: "",
-    showConfigureNFSNextStepsModal: false,
-    showConfigureNFSBackendModal: false,
+    configuringNFS: false,
+    configureNFSErrorMsg: "",
+    configureNFSNamespace: "",
+    showConfigureNFSMinimalRBACModal: false,
+    showConfigureNFSModal: false,
   };
 
   fetchSnapshotSettings = (isCheckForVelero) => {
@@ -151,8 +151,8 @@ class SnapshotSettings extends Component {
       });
   }
 
-  configureNFSBackend = (path, server, forceReset = false) => {
-    this.setState({ configuringNFSBackend: true, configureNFSBackendErrorMsg: "" });
+  configureNFS = (path, server, forceReset = false) => {
+    this.setState({ configuringNFS: true, configureNFSErrorMsg: "" });
 
     fetch(`${window.env.API_ENDPOINT}/snapshots/nfs`, {
       method: "PUT",
@@ -172,7 +172,7 @@ class SnapshotSettings extends Component {
         if (res.status === 409) {
           const response = await res.json();
           this.setState({
-            configuringNFSBackend: false,
+            configuringNFS: false,
             showResetNFSWarningModal: true,
             resetNFSWarningMessage: response.error,
           })
@@ -182,32 +182,50 @@ class SnapshotSettings extends Component {
         const response = await res.json();
         if (!res.ok) {
           this.setState({
-            configuringNFSBackend: false,
-            configureNFSBackendErrorMsg: response.error
-          })
+            configuringNFS: false,
+            configureNFSErrorMsg: response.error
+          });
           return;
         }
 
         if (response.success) {
           this.setState({
-            configuringNFSBackend: false,
-            showConfigureNFSBackendModal: false,
-            showConfigureNFSNextStepsModal: true,
-            configureNFSBackendErrorMsg: "",
-            configureNFSBackendNamespace: response.namespace,
+            configuringNFS: false,
+            showConfigureNFSModal: false,
+            configureNFSErrorMsg: "",
+            updateConfirm: true,
           });
-        } else {
-          this.setState({
-            configuringNFSBackend: false,
-            configureNFSBackendErrorMsg: response.error
-          })
+
+          this.toggleConfigureModal();
+          await this.fetchSnapshotSettings();
+
+          setTimeout(() => {
+            this.setState({ updateConfirm: false })
+          }, 6000);
+          return;
         }
+
+        if (response.isMinimalRBACEnabled) {
+          this.setState({
+            configuringNFS: false,
+            showConfigureNFSModal: false,
+            showConfigureNFSMinimalRBACModal: true,
+            configureNFSErrorMsg: "",
+            configureNFSNamespace: response.namespace,
+          });
+          return;
+        }
+
+        this.setState({
+          configuringNFS: false,
+          configureNFSErrorMsg: response.error
+        });
       })
       .catch((err) => {
         console.error(err);
         this.setState({
-          configuringNFSBackend: false,
-          configureNFSBackendErrorMsg: "Something went wrong, please try again."
+          configuringNFS: false,
+          configureNFSErrorMsg: "Something went wrong, please try again."
         });
       });
   }
@@ -232,12 +250,12 @@ class SnapshotSettings extends Component {
     this.setState({ showResetNFSWarningModal: false });
   };
 
-  toggleConfigureNFSBackendModal = () => {
-    this.setState({ showConfigureNFSBackendModal: !this.state.showConfigureNFSBackendModal });
+  toggleConfigureNFSModal = () => {
+    this.setState({ showConfigureNFSModal: !this.state.showConfigureNFSModal });
   };
   
-  hideConfigureNFSNextStepsModal = () => {
-    this.setState({ showConfigureNFSNextStepsModal: false });
+  hideConfigureNFSMinimalRBACModal = () => {
+    this.setState({ showConfigureNFSMinimalRBACModal: false });
   };
 
   render() {
@@ -286,14 +304,14 @@ class SnapshotSettings extends Component {
             resetNFSWarningMessage={this.state.resetNFSWarningMessage}
             hideResetNFSWarningModal={this.hideResetNFSWarningModal}
 
-            configureNFSBackend={this.configureNFSBackend}
-            configuringNFSBackend={this.state.configuringNFSBackend}
-            configureNFSBackendErrorMsg={this.state.configureNFSBackendErrorMsg}
-            configureNFSBackendNamespace={this.state.configureNFSBackendNamespace}
-            showConfigureNFSBackendModal={this.state.showConfigureNFSBackendModal}
-            toggleConfigureNFSBackendModal={this.toggleConfigureNFSBackendModal}
-            showConfigureNFSNextStepsModal={this.state.showConfigureNFSNextStepsModal}
-            hideConfigureNFSNextStepsModal={this.hideConfigureNFSNextStepsModal}
+            configureNFS={this.configureNFS}
+            configuringNFS={this.state.configuringNFS}
+            configureNFSErrorMsg={this.state.configureNFSErrorMsg}
+            configureNFSNamespace={this.state.configureNFSNamespace}
+            showConfigureNFSModal={this.state.showConfigureNFSModal}
+            toggleConfigureNFSModal={this.toggleConfigureNFSModal}
+            showConfigureNFSMinimalRBACModal={this.state.showConfigureNFSMinimalRBACModal}
+            hideConfigureNFSMinimalRBACModal={this.hideConfigureNFSMinimalRBACModal}
           />
         </div>
       </div>
