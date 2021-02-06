@@ -165,7 +165,7 @@ func (h *Handler) ConfigureNFSSnapshots(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		if err := kotssnapshot.InstallVeleroFromNFSStore(r.Context(), clientset, nfsStore, namespace, registryOptions); err != nil {
+		if err := kotssnapshot.InstallVeleroFromNFSStore(r.Context(), clientset, nfsStore, namespace, registryOptions, true); err != nil {
 			errMsg := "failed to install velero"
 			response.Error = errMsg
 			logger.Error(errors.Wrap(err, errMsg))

@@ -215,7 +215,7 @@ func rewriteVeleroImages(ctx context.Context, clientset kubernetes.Interface, ko
 	return
 }
 
-func InstallVeleroFromNFSStore(ctx context.Context, clientset kubernetes.Interface, nfsStore *types.StoreNFS, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) error {
+func InstallVeleroFromNFSStore(ctx context.Context, clientset kubernetes.Interface, nfsStore *types.StoreNFS, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions, wait bool) error {
 	nfsCreds, err := buildAWSCredentials(nfsStore.AccessKeyID, nfsStore.SecretAccessKey)
 	if err != nil {
 		return errors.Wrap(err, "failed to format credentials")
@@ -236,7 +236,7 @@ func InstallVeleroFromNFSStore(ctx context.Context, clientset kubernetes.Interfa
 		VolumeSnapshotConfig: map[string]string{
 			"region": NFSMinioRegion,
 		},
-		Wait: true,
+		Wait: wait,
 	}
 
 	return InstallVelero(ctx, clientset, veleroInstallOptions, kotsadmNamespace, kotsadmRegistryOptions)

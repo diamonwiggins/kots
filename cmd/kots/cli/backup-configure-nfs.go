@@ -102,7 +102,7 @@ func BackupConfigureNFSCmd() *cobra.Command {
 					return errors.Wrap(err, "failed to build nfs store")
 				}
 
-				if err := snapshot.InstallVeleroFromNFSStore(cmd.Context(), clientset, nfsStore, namespace, *registryOptions); err != nil {
+				if err := snapshot.InstallVeleroFromNFSStore(cmd.Context(), clientset, nfsStore, namespace, *registryOptions, v.GetBool("wait-for-velero")); err != nil {
 					return errors.Wrap(err, "failed to install velero")
 				}
 
@@ -130,15 +130,19 @@ func BackupConfigureNFSCmd() *cobra.Command {
 			}
 
 			log.FinishSpinner()
-			log.ActionWithSpinner("Waiting for Velero to be ready")
 
-			err = snapshot.WaitForVeleroReady(cmd.Context(), clientset, nil)
-			if err != nil {
-				log.FinishSpinnerWithError()
-				return errors.Wrap(err, "failed to wait for velero")
+			if v.GetBool("wait-for-velero") {
+				log.ActionWithSpinner("Waiting for Velero to be ready")
+
+				err := snapshot.WaitForVeleroReady(cmd.Context(), clientset, nil)
+				if err != nil {
+					log.FinishSpinnerWithError()
+					return errors.Wrap(err, "failed to wait for velero")
+				}
+
+				log.FinishSpinner()
 			}
 
-			log.FinishSpinner()
 			log.ActionWithoutSpinner("NFS configured successfully.")
 
 			return nil
@@ -148,7 +152,8 @@ func BackupConfigureNFSCmd() *cobra.Command {
 	cmd.Flags().String("path", "", "path that is exported by the NFS server")
 	cmd.Flags().String("server", "", "the hostname or IP address of the NFS server")
 	cmd.Flags().StringP("namespace", "n", "", "the namespace in which kots/kotsadm is installed")
-	cmd.Flags().Bool("airgap", false, "set to true to run in airgapped mode.")
+	cmd.Flags().Bool("wait-for-velero", true, "wait for Velero to be ready")
+	cmd.Flags().Bool("airgap", false, "set to true to run in airgapped mode")
 
 	registryFlags(cmd.Flags())
 
