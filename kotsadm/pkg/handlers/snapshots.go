@@ -183,7 +183,7 @@ func (h *Handler) ConfigureNFSSnapshots(w http.ResponseWriter, r *http.Request) 
 
 	// velero is already installed, only configure velero deployment and the store
 
-	err = kotssnapshot.ConfigureVeleroDeployment(r.Context(), clientset, namespace, registryOptions, true)
+	err = kotssnapshot.ConfigureVeleroDeployment(r.Context(), clientset, namespace, registryOptions)
 	if err != nil {
 		errMsg := "failed to configure velero deployment"
 		response.Error = errMsg
@@ -199,6 +199,15 @@ func (h *Handler) ConfigureNFSSnapshots(w http.ResponseWriter, r *http.Request) 
 	_, err = kotssnapshot.ConfigureStore(configureStoreOptions)
 	if err != nil {
 		errMsg := "failed to configure store"
+		response.Error = errMsg
+		logger.Error(errors.Wrap(err, errMsg))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	err = kotssnapshot.WaitForVeleroReady(r.Context(), clientset, nil)
+	if err != nil {
+		errMsg := "failed to wait for velero"
 		response.Error = errMsg
 		logger.Error(errors.Wrap(err, errMsg))
 		w.WriteHeader(http.StatusInternalServerError)

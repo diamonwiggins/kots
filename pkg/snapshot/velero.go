@@ -109,17 +109,13 @@ func InstallVelero(ctx context.Context, clientset kubernetes.Interface, veleroIn
 	}
 
 	// this is necessary to add/remove the imagePullSecrets and to update the images in case the deployment has been previously created
-	if err := ConfigureVeleroDeployment(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions, false); err != nil {
+	if err := ConfigureVeleroDeployment(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions); err != nil {
 		return errors.Wrap(err, "failed to configure velero deployment")
 	}
 
 	if veleroInstallOptions.Wait {
-		fmt.Println("Waiting for Velero deployment to be ready.")
-		if err := waitForVeleroDeploymentReady(ctx, clientset, *factory); err != nil {
-			return errors.Wrap(err, errorMsg)
-		}
-		fmt.Println("Waiting for Velero restic daemonset to be ready.")
-		if _, err = install.DaemonSetIsReady(*factory, veleroNamespace); err != nil {
+		fmt.Println("Waiting for Velero deployment and restic daemonset to be ready.")
+		if err := WaitForVeleroReady(ctx, clientset, factory); err != nil {
 			return errors.Wrap(err, errorMsg)
 		}
 	}
@@ -128,7 +124,7 @@ func InstallVelero(ctx context.Context, clientset kubernetes.Interface, veleroIn
 }
 
 // ConfigureVeleroDeployment will rewrite velero images based on the provided kotsadm registry options and will also add/remove imagePullSecrets if necessary
-func ConfigureVeleroDeployment(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions, wait bool) error {
+func ConfigureVeleroDeployment(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) error {
 	veleroImage, pluginImage, imagePullSecrets, err := rewriteVeleroImages(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions)
 	if err != nil {
 		return errors.Wrap(err, "failed to rewrite images")
@@ -152,19 +148,23 @@ func ConfigureVeleroDeployment(ctx context.Context, clientset kubernetes.Interfa
 		return errors.Wrap(err, "failed to update velero deployment")
 	}
 
-	if wait {
-		factory, err := getVeleroFactory()
+	return nil
+}
+
+func WaitForVeleroReady(ctx context.Context, clientset kubernetes.Interface, factory *client.DynamicFactory) error {
+	if factory == nil {
+		var err error
+		factory, err = getVeleroFactory()
 		if err != nil {
 			return errors.Wrap(err, "failed to get velero factory")
 		}
-		if err := waitForVeleroDeploymentReady(ctx, clientset, *factory); err != nil {
-			return errors.Wrap(err, "failed to wait for velero deployment to be ready")
-		}
-		if _, err := install.DaemonSetIsReady(*factory, veleroNamespace); err != nil {
-			return errors.Wrap(err, "failed to wait for Velero restic daemonset to be ready.")
-		}
 	}
-
+	if err := waitForVeleroDeploymentReady(ctx, clientset, *factory); err != nil {
+		return errors.Wrap(err, "failed to wait for velero deployment to be ready")
+	}
+	if _, err := install.DaemonSetIsReady(*factory, veleroNamespace); err != nil {
+		return errors.Wrap(err, "failed to wait for Velero restic daemonset to be ready.")
+	}
 	return nil
 }
 

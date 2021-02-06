@@ -113,7 +113,7 @@ func BackupConfigureNFSCmd() *cobra.Command {
 
 			log.ActionWithSpinner("Configuring Velero")
 
-			err = snapshot.ConfigureVeleroDeployment(cmd.Context(), clientset, namespace, *registryOptions, true)
+			err = snapshot.ConfigureVeleroDeployment(cmd.Context(), clientset, namespace, *registryOptions)
 			if err != nil {
 				log.FinishSpinnerWithError()
 				return errors.Wrap(err, "failed to configure velero deployment")
@@ -127,6 +127,15 @@ func BackupConfigureNFSCmd() *cobra.Command {
 			if err != nil {
 				log.FinishSpinnerWithError()
 				return errors.Wrap(err, "failed to configure store")
+			}
+
+			log.FinishSpinner()
+			log.ActionWithSpinner("Waiting for Velero to be ready")
+
+			err = snapshot.WaitForVeleroReady(cmd.Context(), clientset, nil)
+			if err != nil {
+				log.FinishSpinnerWithError()
+				return errors.Wrap(err, "failed to wait for velero")
 			}
 
 			log.FinishSpinner()
