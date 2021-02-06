@@ -48,6 +48,8 @@ type NFSDeployOptions struct {
 	IsOpenShift bool
 	ForceReset  bool
 	NFSConfig   types.NFSConfig
+	// if Wait is set to false, a default bucket will not be created
+	Wait bool
 }
 
 type ResetNFSError struct {
@@ -80,6 +82,7 @@ func DeployNFSMinio(ctx context.Context, clientset kubernetes.Interface, deployO
 		}
 	}
 	if shouldReset || !hasMinioConfig {
+		// restart nfs minio to regenerate the config
 		err := scaleDownNFSMinio(ctx, clientset, deployOptions.Namespace)
 		if err != nil {
 			return errors.Wrap(err, "failed to scale down nfs minio")
@@ -95,7 +98,7 @@ func DeployNFSMinio(ctx context.Context, clientset kubernetes.Interface, deployO
 	if err != nil {
 		return errors.Wrap(err, "failed to ensure nfs minio secret")
 	}
-	secret, err := ensureSecret(ctx, clientset, deployOptions.Namespace)
+	secret, err := ensureNFSMinioSecret(ctx, clientset, deployOptions.Namespace)
 	if err != nil {
 		return errors.Wrap(err, "failed to ensure nfs minio secret")
 	}
@@ -107,12 +110,24 @@ func DeployNFSMinio(ctx context.Context, clientset kubernetes.Interface, deployO
 	if err != nil {
 		return errors.Wrap(err, "failed to marshal nfs minio secret")
 	}
-	if err := ensureDeployment(ctx, clientset, deployOptions, registryOptions, marshalledSecret); err != nil {
+	if err := ensureNFSMinioDeployment(ctx, clientset, deployOptions, registryOptions, marshalledSecret); err != nil {
 		return errors.Wrap(err, "failed to ensure nfs minio deployment")
 	}
-	if err := ensureService(ctx, clientset, deployOptions.Namespace); err != nil {
+	if err := ensureNFSMinioService(ctx, clientset, deployOptions.Namespace); err != nil {
 		return errors.Wrap(err, "failed to ensure service")
 	}
+
+	if deployOptions.Wait {
+		err := waitForNFSMinioReady(ctx, clientset, deployOptions.Namespace, time.Minute*5)
+		if err != nil {
+			return errors.Wrap(err, "failed to wait for nfs minio deployment")
+		}
+		err = createNFSMinioDefaultBucket(ctx, clientset, deployOptions.Namespace)
+		if err != nil {
+			return errors.Wrap(err, "failed to create nfs minio default bucket")
+		}
+	}
+
 	return nil
 }
 
@@ -165,7 +180,7 @@ func updateConfigMap(existingConfigMap, desiredConfigMap *corev1.ConfigMap) *cor
 	return existingConfigMap
 }
 
-func ensureSecret(ctx context.Context, clientset kubernetes.Interface, namespace string) (*corev1.Secret, error) {
+func ensureNFSMinioSecret(ctx context.Context, clientset kubernetes.Interface, namespace string) (*corev1.Secret, error) {
 	secret := secretResource()
 
 	existingSecret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, secret.Name, metav1.GetOptions{})
@@ -206,7 +221,7 @@ func secretResource() *corev1.Secret {
 	}
 }
 
-func ensureDeployment(ctx context.Context, clientset kubernetes.Interface, deployOptions NFSDeployOptions, registryOptions kotsadmtypes.KotsadmOptions, marshalledSecret []byte) error {
+func ensureNFSMinioDeployment(ctx context.Context, clientset kubernetes.Interface, deployOptions NFSDeployOptions, registryOptions kotsadmtypes.KotsadmOptions, marshalledSecret []byte) error {
 	secretChecksum := fmt.Sprintf("%x", md5.Sum(marshalledSecret))
 
 	deployment, err := deploymentResource(clientset, secretChecksum, deployOptions, registryOptions)
@@ -394,7 +409,7 @@ func updateDeployment(existingDeployment, desiredDeployment *appsv1.Deployment) 
 	return existingDeployment
 }
 
-func ensureService(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
+func ensureNFSMinioService(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
 	service := serviceResource()
 
 	existingService, err := clientset.CoreV1().Services(namespace).Get(ctx, service.Name, metav1.GetOptions{})
@@ -452,11 +467,11 @@ func updateService(existingService, desiredService *corev1.Service) *corev1.Serv
 	return existingService
 }
 
-func WaitForNFSMinioReady(ctx context.Context, clientset kubernetes.Interface, namespace string, timeout time.Duration) error {
+func waitForNFSMinioReady(ctx context.Context, clientset kubernetes.Interface, namespace string, timeout time.Duration) error {
 	start := time.Now()
 
 	for {
-		d, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), NFSMinioDeploymentName, metav1.GetOptions{})
+		d, err := clientset.AppsV1().Deployments(namespace).Get(ctx, NFSMinioDeploymentName, metav1.GetOptions{})
 		if err != nil {
 			if !kuberneteserrors.IsNotFound(err) {
 				return errors.Wrap(err, "failed to get existing deployment")
@@ -464,14 +479,14 @@ func WaitForNFSMinioReady(ctx context.Context, clientset kubernetes.Interface, n
 			return nil
 		}
 
-		if d.Status.AvailableReplicas == 1 {
+		if d.Status.ObservedGeneration == d.ObjectMeta.Generation && d.Status.ReadyReplicas == *d.Spec.Replicas {
 			return nil
 		}
 
 		time.Sleep(time.Second)
 
 		if time.Now().Sub(start) > timeout {
-			return errors.New("timeout waiting for deployment to scale down")
+			return errors.New("timeout waiting for deployment to become ready")
 		}
 	}
 }
@@ -499,7 +514,7 @@ func waitForNFSMinioScaleDown(ctx context.Context, clientset kubernetes.Interfac
 	start := time.Now()
 
 	for {
-		d, err := clientset.AppsV1().Deployments(namespace).Get(context.TODO(), NFSMinioDeploymentName, metav1.GetOptions{})
+		d, err := clientset.AppsV1().Deployments(namespace).Get(ctx, NFSMinioDeploymentName, metav1.GetOptions{})
 		if err != nil {
 			if !kuberneteserrors.IsNotFound(err) {
 				return errors.Wrap(err, "failed to get existing deployment")
@@ -826,7 +841,7 @@ func getNFSResetWarningMsg(nfsPath string) string {
 	return fmt.Sprintf("The %s directory was previously configured by a different minio instance.\nProceeding will re-configure it to be used only by this new minio instance, and any other minio instance using this location will no longer have access.\nIf you are attempting to fully restore a prior installation, such as a disaster recovery scenario, this action is expected.", nfsPath)
 }
 
-func CreateNFSBucket(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
+func createNFSMinioDefaultBucket(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
 	secret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, NFSMinioSecretName, metav1.GetOptions{})
 	if err != nil {
 		return errors.Wrap(err, "failed to get nfs minio secret")

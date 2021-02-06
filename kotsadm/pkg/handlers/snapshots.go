@@ -228,19 +228,10 @@ func configureNFSMinio(ctx context.Context, clientset kubernetes.Interface, opts
 			Path:   opts.Path,
 			Server: opts.Server,
 		},
+		Wait: true,
 	}
 	if err := kotssnapshot.DeployNFSMinio(ctx, clientset, deployOptions, registryOptions); err != nil {
 		return err
-	}
-
-	err = kotssnapshot.WaitForNFSMinioReady(ctx, clientset, namespace, time.Minute*5)
-	if err != nil {
-		return errors.Wrap(err, "failed to wait for nfs minio")
-	}
-
-	err = kotssnapshot.CreateNFSBucket(ctx, clientset, namespace)
-	if err != nil {
-		return errors.Wrap(err, "failed to create default bucket")
 	}
 
 	return nil

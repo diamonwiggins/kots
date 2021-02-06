@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/fatih/color"
 
@@ -66,6 +65,7 @@ func BackupConfigureNFSCmd() *cobra.Command {
 					Path:   nfsPath,
 					Server: nfsServer,
 				},
+				Wait: true,
 			}
 			if err := snapshot.DeployNFSMinio(cmd.Context(), clientset, deployOptions, *registryOptions); err != nil {
 				if _, ok := errors.Cause(err).(*snapshot.ResetNFSError); ok {
@@ -83,24 +83,6 @@ func BackupConfigureNFSCmd() *cobra.Command {
 					log.FinishSpinnerWithError()
 					return errors.Wrap(err, "failed to deploy nfs minio")
 				}
-			}
-
-			log.FinishSpinner()
-			log.ActionWithSpinner("Waiting for NFS Minio to be ready")
-
-			err = snapshot.WaitForNFSMinioReady(cmd.Context(), clientset, namespace, time.Minute*5)
-			if err != nil {
-				log.FinishSpinnerWithError()
-				return errors.Wrap(err, "failed to wait for nfs minio")
-			}
-
-			log.FinishSpinner()
-			log.ActionWithSpinner("Creating default bucket")
-
-			err = snapshot.CreateNFSBucket(cmd.Context(), clientset, namespace)
-			if err != nil {
-				log.FinishSpinnerWithError()
-				return errors.Wrap(err, "failed to create default bucket")
 			}
 
 			log.FinishSpinner()
