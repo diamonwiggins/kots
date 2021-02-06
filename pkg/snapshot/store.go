@@ -1,6 +1,8 @@
 package snapshot
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"net/url"
@@ -351,7 +353,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 				}
 			}
 		} else {
-			awsCredentials, err := FormatAWSCredentials(store.AWS.AccessKeyID, store.AWS.SecretAccessKey)
+			awsCredentials, err := buildAWSCredentials(store.AWS.AccessKeyID, store.AWS.SecretAccessKey)
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to format aws credentials")
 			}
@@ -396,7 +398,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 			"s3ForcePathStyle": "true",
 		}
 
-		otherCredentials, err := FormatAWSCredentials(store.Other.AccessKeyID, store.Other.SecretAccessKey)
+		otherCredentials, err := buildAWSCredentials(store.Other.AccessKeyID, store.Other.SecretAccessKey)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to format other credentials")
 		}
@@ -441,7 +443,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 			"s3ForcePathStyle": "true",
 		}
 
-		internalCredentials, err := FormatAWSCredentials(store.Internal.AccessKeyID, store.Internal.SecretAccessKey)
+		internalCredentials, err := buildAWSCredentials(store.Internal.AccessKeyID, store.Internal.SecretAccessKey)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to format internal credentials")
 		}
@@ -486,7 +488,7 @@ func UpdateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, err
 			"s3ForcePathStyle": "true",
 		}
 
-		nfsCredentials, err := FormatAWSCredentials(store.NFS.AccessKeyID, store.NFS.SecretAccessKey)
+		nfsCredentials, err := buildAWSCredentials(store.NFS.AccessKeyID, store.NFS.SecretAccessKey)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to format nfs credentials")
 		}
@@ -829,6 +831,35 @@ func FindBackupStoreLocation() (*velerov1.BackupStorageLocation, error) {
 	}
 
 	return nil, errors.New("global config not found")
+}
+
+func buildAWSCredentials(accessKeyID, secretAccessKey string) ([]byte, error) {
+	awsCfg := ini.Empty()
+	section, err := awsCfg.NewSection("default")
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create default section in aws creds")
+	}
+	_, err = section.NewKey("aws_access_key_id", accessKeyID)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create access key")
+	}
+
+	_, err = section.NewKey("aws_secret_access_key", secretAccessKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create secret access key")
+	}
+
+	var awsCredentials bytes.Buffer
+	writer := bufio.NewWriter(&awsCredentials)
+	_, err = awsCfg.WriteTo(writer)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to write ini")
+	}
+	if err := writer.Flush(); err != nil {
+		return nil, errors.Wrap(err, "failed to flush buffer")
+	}
+
+	return awsCredentials.Bytes(), nil
 }
 
 func BuildNFSStore(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string) (*types.StoreNFS, error) {

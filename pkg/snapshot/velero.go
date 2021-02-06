@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"time"
 
 	"github.com/pkg/errors"
+	"github.com/replicatedhq/kots/pkg/k8sutil"
 	"github.com/replicatedhq/kots/pkg/kotsadm"
 	kotsadmtypes "github.com/replicatedhq/kots/pkg/kotsadm/types"
 	kotsadmversion "github.com/replicatedhq/kots/pkg/kotsadm/version"
@@ -94,35 +96,30 @@ func InstallVelero(ctx context.Context, clientset kubernetes.Interface, veleroIn
 		return errors.Wrap(err, "failed to get resources")
 	}
 
-	config := client.VeleroConfig{}
-	f := client.NewFactory("install", config)
-
-	dynamicClient, err := f.DynamicClient()
+	factory, err := getVeleroFactory()
 	if err != nil {
-		return errors.Wrap(err, "failed to get dynamic client")
+		return errors.Wrap(err, "failed to get velero factory")
 	}
-	factory := client.NewDynamicFactory(dynamicClient)
 
 	errorMsg := fmt.Sprintf("\n\nError installing Velero. Use `kubectl logs deploy/velero -n %s` to check the deploy logs", veleroNamespace)
 
-	err = install.Install(factory, resources, os.Stdout)
+	err = install.Install(*factory, resources, os.Stdout)
 	if err != nil {
 		return errors.Wrap(err, errorMsg)
 	}
 
 	// this is necessary to add/remove the imagePullSecrets and to update the images in case the deployment has been previously created
-	if err := ConfigureVeleroDeployment(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions); err != nil {
+	if err := ConfigureVeleroDeployment(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions, false); err != nil {
 		return errors.Wrap(err, "failed to configure velero deployment")
 	}
 
 	if veleroInstallOptions.Wait {
 		fmt.Println("Waiting for Velero deployment to be ready.")
-		if _, err = install.DeploymentIsReady(factory, veleroNamespace); err != nil {
+		if err := waitForVeleroDeploymentReady(ctx, clientset, *factory); err != nil {
 			return errors.Wrap(err, errorMsg)
 		}
-
 		fmt.Println("Waiting for Velero restic daemonset to be ready.")
-		if _, err = install.DaemonSetIsReady(factory, veleroNamespace); err != nil {
+		if _, err = install.DaemonSetIsReady(*factory, veleroNamespace); err != nil {
 			return errors.Wrap(err, errorMsg)
 		}
 	}
@@ -131,7 +128,7 @@ func InstallVelero(ctx context.Context, clientset kubernetes.Interface, veleroIn
 }
 
 // ConfigureVeleroDeployment will rewrite velero images based on the provided kotsadm registry options and will also add/remove imagePullSecrets if necessary
-func ConfigureVeleroDeployment(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) error {
+func ConfigureVeleroDeployment(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions, wait bool) error {
 	veleroImage, pluginImage, imagePullSecrets, err := rewriteVeleroImages(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions)
 	if err != nil {
 		return errors.Wrap(err, "failed to rewrite images")
@@ -155,7 +152,44 @@ func ConfigureVeleroDeployment(ctx context.Context, clientset kubernetes.Interfa
 		return errors.Wrap(err, "failed to update velero deployment")
 	}
 
+	if wait {
+		factory, err := getVeleroFactory()
+		if err != nil {
+			return errors.Wrap(err, "failed to get velero factory")
+		}
+		if err := waitForVeleroDeploymentReady(ctx, clientset, *factory); err != nil {
+			return errors.Wrap(err, "failed to wait for velero deployment to be ready")
+		}
+		if _, err := install.DaemonSetIsReady(*factory, veleroNamespace); err != nil {
+			return errors.Wrap(err, "failed to wait for Velero restic daemonset to be ready.")
+		}
+	}
+
 	return nil
+}
+
+func waitForVeleroDeploymentReady(ctx context.Context, clientset kubernetes.Interface, factory client.DynamicFactory) error {
+	// both of these functions are needed to check if velero deployment is ready
+	if err := k8sutil.WaitForDeploymentReady(ctx, clientset, veleroNamespace, veleroDeploymentName, time.Minute*2); err != nil {
+		return err
+	}
+	if _, err := install.DeploymentIsReady(factory, veleroNamespace); err != nil {
+		return err
+	}
+	return nil
+}
+
+func getVeleroFactory() (*client.DynamicFactory, error) {
+	config := client.VeleroConfig{}
+	f := client.NewFactory("install", config)
+
+	dynamicClient, err := f.DynamicClient()
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to get dynamic client")
+	}
+	factory := client.NewDynamicFactory(dynamicClient)
+
+	return &factory, nil
 }
 
 func rewriteVeleroImages(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) (veleroImage string, pluginImage string, imagePullSecrets []corev1.LocalObjectReference, finalErr error) {
@@ -182,7 +216,7 @@ func rewriteVeleroImages(ctx context.Context, clientset kubernetes.Interface, ko
 }
 
 func InstallVeleroFromNFSStore(ctx context.Context, clientset kubernetes.Interface, nfsStore *types.StoreNFS, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) error {
-	nfsCreds, err := FormatAWSCredentials(nfsStore.AccessKeyID, nfsStore.SecretAccessKey)
+	nfsCreds, err := buildAWSCredentials(nfsStore.AccessKeyID, nfsStore.SecretAccessKey)
 	if err != nil {
 		return errors.Wrap(err, "failed to format credentials")
 	}

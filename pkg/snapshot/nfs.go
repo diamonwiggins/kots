@@ -8,7 +8,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"io"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -18,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
+	"github.com/replicatedhq/kots/pkg/k8sutil"
 	"github.com/replicatedhq/kots/pkg/kotsadm"
 	kotsadmtypes "github.com/replicatedhq/kots/pkg/kotsadm/types"
 	kotsadmversion "github.com/replicatedhq/kots/pkg/kotsadm/version"
@@ -83,13 +83,9 @@ func DeployNFSMinio(ctx context.Context, clientset kubernetes.Interface, deployO
 	}
 	if shouldReset || !hasMinioConfig {
 		// restart nfs minio to regenerate the config
-		err := scaleDownNFSMinio(ctx, clientset, deployOptions.Namespace)
+		err := k8sutil.ScaleDownDeployment(ctx, clientset, deployOptions.Namespace, NFSMinioDeploymentName)
 		if err != nil {
 			return errors.Wrap(err, "failed to scale down nfs minio")
-		}
-		err = waitForNFSMinioScaleDown(ctx, clientset, deployOptions.Namespace, time.Minute*2)
-		if err != nil {
-			return errors.Wrap(err, "failed to wait for nfs minio deployment to scale down")
 		}
 	}
 
@@ -118,9 +114,9 @@ func DeployNFSMinio(ctx context.Context, clientset kubernetes.Interface, deployO
 	}
 
 	if deployOptions.Wait {
-		err := waitForNFSMinioReady(ctx, clientset, deployOptions.Namespace, time.Minute*5)
+		err := k8sutil.WaitForDeploymentReady(ctx, clientset, deployOptions.Namespace, NFSMinioDeploymentName, time.Minute*2)
 		if err != nil {
-			return errors.Wrap(err, "failed to wait for nfs minio deployment")
+			return errors.Wrap(err, "failed to wait for nfs minio deployment to be ready")
 		}
 		err = createNFSMinioDefaultBucket(ctx, clientset, deployOptions.Namespace)
 		if err != nil {
@@ -132,7 +128,7 @@ func DeployNFSMinio(ctx context.Context, clientset kubernetes.Interface, deployO
 }
 
 func ensureNFSConfigMap(ctx context.Context, clientset kubernetes.Interface, deployOptions NFSDeployOptions) error {
-	configmap := configMapResource(deployOptions.NFSConfig)
+	configmap := nfsConfigMapResource(deployOptions.NFSConfig)
 
 	existingConfigMap, err := clientset.CoreV1().ConfigMaps(deployOptions.Namespace).Get(ctx, configmap.Name, metav1.GetOptions{})
 	if err != nil {
@@ -148,7 +144,7 @@ func ensureNFSConfigMap(ctx context.Context, clientset kubernetes.Interface, dep
 		return nil
 	}
 
-	existingConfigMap = updateConfigMap(existingConfigMap, configmap)
+	existingConfigMap = updateNFSConfigMap(existingConfigMap, configmap)
 
 	_, err = clientset.CoreV1().ConfigMaps(deployOptions.Namespace).Update(ctx, existingConfigMap, metav1.UpdateOptions{})
 	if err != nil {
@@ -158,7 +154,7 @@ func ensureNFSConfigMap(ctx context.Context, clientset kubernetes.Interface, dep
 	return nil
 }
 
-func configMapResource(nfsConfig types.NFSConfig) *corev1.ConfigMap {
+func nfsConfigMapResource(nfsConfig types.NFSConfig) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
@@ -174,14 +170,14 @@ func configMapResource(nfsConfig types.NFSConfig) *corev1.ConfigMap {
 	}
 }
 
-func updateConfigMap(existingConfigMap, desiredConfigMap *corev1.ConfigMap) *corev1.ConfigMap {
+func updateNFSConfigMap(existingConfigMap, desiredConfigMap *corev1.ConfigMap) *corev1.ConfigMap {
 	existingConfigMap.Data = desiredConfigMap.Data
 
 	return existingConfigMap
 }
 
 func ensureNFSMinioSecret(ctx context.Context, clientset kubernetes.Interface, namespace string) (*corev1.Secret, error) {
-	secret := secretResource()
+	secret := nfsMinioSecretResource()
 
 	existingSecret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, secret.Name, metav1.GetOptions{})
 	if err != nil {
@@ -202,7 +198,7 @@ func ensureNFSMinioSecret(ctx context.Context, clientset kubernetes.Interface, n
 	return existingSecret, nil
 }
 
-func secretResource() *corev1.Secret {
+func nfsMinioSecretResource() *corev1.Secret {
 	accessKey := "kotsadm"
 	secretKey := uuid.New().String()
 
@@ -224,7 +220,7 @@ func secretResource() *corev1.Secret {
 func ensureNFSMinioDeployment(ctx context.Context, clientset kubernetes.Interface, deployOptions NFSDeployOptions, registryOptions kotsadmtypes.KotsadmOptions, marshalledSecret []byte) error {
 	secretChecksum := fmt.Sprintf("%x", md5.Sum(marshalledSecret))
 
-	deployment, err := deploymentResource(clientset, secretChecksum, deployOptions, registryOptions)
+	deployment, err := nfsMinioDeploymentResource(clientset, secretChecksum, deployOptions, registryOptions)
 	if err != nil {
 		return errors.Wrap(err, "failed to get deployment resource")
 	}
@@ -243,7 +239,7 @@ func ensureNFSMinioDeployment(ctx context.Context, clientset kubernetes.Interfac
 		return nil
 	}
 
-	existingDeployment = updateDeployment(existingDeployment, deployment)
+	existingDeployment = updateNFSMinioDeployment(existingDeployment, deployment)
 
 	_, err = clientset.AppsV1().Deployments(deployOptions.Namespace).Update(ctx, existingDeployment, metav1.UpdateOptions{})
 	if err != nil {
@@ -253,7 +249,7 @@ func ensureNFSMinioDeployment(ctx context.Context, clientset kubernetes.Interfac
 	return nil
 }
 
-func deploymentResource(clientset kubernetes.Interface, secretChecksum string, deployOptions NFSDeployOptions, registryOptions kotsadmtypes.KotsadmOptions) (*appsv1.Deployment, error) {
+func nfsMinioDeploymentResource(clientset kubernetes.Interface, secretChecksum string, deployOptions NFSDeployOptions, registryOptions kotsadmtypes.KotsadmOptions) (*appsv1.Deployment, error) {
 	kotsadmTag := kotsadmversion.KotsadmTag(kotsadmtypes.KotsadmOptions{}) // default tag
 	image := fmt.Sprintf("kotsadm/minio:%s", kotsadmTag)
 	imagePullSecrets := []corev1.LocalObjectReference{}
@@ -388,7 +384,7 @@ func deploymentResource(clientset kubernetes.Interface, secretChecksum string, d
 	}, nil
 }
 
-func updateDeployment(existingDeployment, desiredDeployment *appsv1.Deployment) *appsv1.Deployment {
+func updateNFSMinioDeployment(existingDeployment, desiredDeployment *appsv1.Deployment) *appsv1.Deployment {
 	if len(existingDeployment.Spec.Template.Spec.Containers) == 0 {
 		// hmm
 		return desiredDeployment
@@ -410,7 +406,7 @@ func updateDeployment(existingDeployment, desiredDeployment *appsv1.Deployment) 
 }
 
 func ensureNFSMinioService(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
-	service := serviceResource()
+	service := nfsMinioServiceResource()
 
 	existingService, err := clientset.CoreV1().Services(namespace).Get(ctx, service.Name, metav1.GetOptions{})
 	if err != nil {
@@ -426,7 +422,7 @@ func ensureNFSMinioService(ctx context.Context, clientset kubernetes.Interface, 
 		return nil
 	}
 
-	existingService = updateService(existingService, service)
+	existingService = updateNFSMinioService(existingService, service)
 
 	_, err = clientset.CoreV1().Services(namespace).Update(ctx, existingService, metav1.UpdateOptions{})
 	if err != nil {
@@ -436,7 +432,7 @@ func ensureNFSMinioService(ctx context.Context, clientset kubernetes.Interface, 
 	return nil
 }
 
-func serviceResource() *corev1.Service {
+func nfsMinioServiceResource() *corev1.Service {
 	return &corev1.Service{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "v1",
@@ -461,77 +457,10 @@ func serviceResource() *corev1.Service {
 	}
 }
 
-func updateService(existingService, desiredService *corev1.Service) *corev1.Service {
+func updateNFSMinioService(existingService, desiredService *corev1.Service) *corev1.Service {
 	existingService.Spec.Ports = desiredService.Spec.Ports
 
 	return existingService
-}
-
-func waitForNFSMinioReady(ctx context.Context, clientset kubernetes.Interface, namespace string, timeout time.Duration) error {
-	start := time.Now()
-
-	for {
-		d, err := clientset.AppsV1().Deployments(namespace).Get(ctx, NFSMinioDeploymentName, metav1.GetOptions{})
-		if err != nil {
-			if !kuberneteserrors.IsNotFound(err) {
-				return errors.Wrap(err, "failed to get existing deployment")
-			}
-			return nil
-		}
-
-		if d.Status.ObservedGeneration == d.ObjectMeta.Generation && d.Status.ReadyReplicas == *d.Spec.Replicas {
-			return nil
-		}
-
-		time.Sleep(time.Second)
-
-		if time.Now().Sub(start) > timeout {
-			return errors.New("timeout waiting for deployment to become ready")
-		}
-	}
-}
-
-func scaleDownNFSMinio(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
-	d, err := clientset.AppsV1().Deployments(namespace).Get(ctx, NFSMinioDeploymentName, metav1.GetOptions{})
-	if err != nil {
-		if !kuberneteserrors.IsNotFound(err) {
-			return errors.Wrap(err, "failed to get existing deployment")
-		}
-		return nil
-	}
-
-	d.Spec.Replicas = pointer.Int32Ptr(0)
-
-	_, err = clientset.AppsV1().Deployments(namespace).Update(ctx, d, metav1.UpdateOptions{})
-	if err != nil {
-		return errors.Wrap(err, "failed to update deployment")
-	}
-
-	return nil
-}
-
-func waitForNFSMinioScaleDown(ctx context.Context, clientset kubernetes.Interface, namespace string, timeout time.Duration) error {
-	start := time.Now()
-
-	for {
-		d, err := clientset.AppsV1().Deployments(namespace).Get(ctx, NFSMinioDeploymentName, metav1.GetOptions{})
-		if err != nil {
-			if !kuberneteserrors.IsNotFound(err) {
-				return errors.Wrap(err, "failed to get existing deployment")
-			}
-			return nil
-		}
-
-		if d.Status.AvailableReplicas == 0 {
-			return nil
-		}
-
-		time.Sleep(time.Second)
-
-		if time.Now().Sub(start) > timeout {
-			return errors.New("timeout waiting for deployment to scale down")
-		}
-	}
 }
 
 func shouldResetNFSMount(ctx context.Context, clientset kubernetes.Interface, deployOptions NFSDeployOptions, registryOptions kotsadmtypes.KotsadmOptions) (shouldReset bool, hasMinioConfig bool, finalErr error) {
@@ -541,13 +470,13 @@ func shouldResetNFSMount(ctx context.Context, clientset kubernetes.Interface, de
 		return
 	}
 
-	if err := waitForPodCompleted(ctx, clientset, deployOptions.Namespace, checkPod.Name, time.Minute*2); err != nil {
+	if err := k8sutil.WaitForPodCompleted(ctx, clientset, deployOptions.Namespace, checkPod.Name, time.Minute*2); err != nil {
 		finalErr = errors.Wrap(err, "failed to wait for nfs minio check pod to complete")
 		return
 	}
 	defer clientset.CoreV1().Pods(deployOptions.Namespace).Delete(ctx, checkPod.Name, metav1.DeleteOptions{})
 
-	logs, err := getPodLogs(ctx, clientset, checkPod)
+	logs, err := k8sutil.GetPodLogs(ctx, clientset, checkPod)
 	if err != nil {
 		finalErr = errors.Wrap(err, "failed to get nfs minio check pod logs")
 		return
@@ -616,7 +545,7 @@ func resetNFSMount(ctx context.Context, clientset kubernetes.Interface, deployOp
 		return errors.Wrap(err, "failed to create nfs minio reset pod")
 	}
 
-	if err := waitForPodCompleted(ctx, clientset, deployOptions.Namespace, resetPod.Name, time.Minute*2); err != nil {
+	if err := k8sutil.WaitForPodCompleted(ctx, clientset, deployOptions.Namespace, resetPod.Name, time.Minute*2); err != nil {
 		return errors.Wrap(err, "failed to wait for nfs minio reset pod to complete")
 	}
 
@@ -633,7 +562,7 @@ func writeMinioKeysSHAFile(ctx context.Context, clientset kubernetes.Interface, 
 		return errors.Wrap(err, "failed to create nfs minio keysSHA pod")
 	}
 
-	if err := waitForPodCompleted(ctx, clientset, deployOptions.Namespace, keysSHAPod.Name, time.Minute*2); err != nil {
+	if err := k8sutil.WaitForPodCompleted(ctx, clientset, deployOptions.Namespace, keysSHAPod.Name, time.Minute*2); err != nil {
 		return errors.Wrap(err, "failed to wait for nfs minio keysSHA pod to complete")
 	}
 
@@ -783,58 +712,6 @@ func nfsMinioConfigPod(clientset kubernetes.Interface, deployOptions NFSDeployOp
 	}
 
 	return pod, nil
-}
-
-func waitForPodCompleted(ctx context.Context, clientset kubernetes.Interface, namespace string, podName string, timeoutWaitingForPod time.Duration) error {
-	start := time.Now()
-
-	for {
-		pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
-		if err != nil {
-			return errors.Wrap(err, "failed to list pods")
-		}
-
-		if pod.Status.Phase == corev1.PodSucceeded {
-			return nil
-		}
-
-		time.Sleep(time.Second)
-
-		if time.Now().Sub(start) > timeoutWaitingForPod {
-			return errors.New("timeout waiting for pod to complete")
-		}
-	}
-}
-
-func getPodLogs(ctx context.Context, clientset kubernetes.Interface, pod *corev1.Pod) ([]byte, error) {
-	podLogOpts := corev1.PodLogOptions{
-		Container: pod.Spec.Containers[0].Name,
-	}
-
-	req := clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &podLogOpts)
-	podLogs, err := req.Stream(ctx)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to get log stream")
-	}
-	defer podLogs.Close()
-
-	buf := new(bytes.Buffer)
-	errChan := make(chan error, 0)
-	go func() {
-		_, err := io.Copy(buf, podLogs)
-		errChan <- err
-	}()
-
-	select {
-	case resErr := <-errChan:
-		if resErr != nil {
-			return nil, errors.Wrap(resErr, "failed to copy logs")
-		} else {
-			return buf.Bytes(), nil
-		}
-	case <-ctx.Done():
-		return nil, errors.Wrap(ctx.Err(), "context ended copying logs")
-	}
 }
 
 func getNFSResetWarningMsg(nfsPath string) string {
