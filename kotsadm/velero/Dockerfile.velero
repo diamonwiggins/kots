@@ -1,0 +1,7 @@
+FROM velero/velero:v1.5.1
+
+RUN apk update && apk add ca-certificates && rm -rf /var/cache/apk/*
+
+RUN adduser -h /home/velero -s /bin/sh -u 1001 -D velero
+USER velero
+ENV HOME /home/velero
