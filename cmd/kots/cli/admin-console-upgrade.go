@@ -94,7 +94,8 @@ func AdminConsoleUpgradeCmd() *cobra.Command {
 					return errors.Wrap(err, "failed to get clientset")
 				}
 				if err := snapshot.InstallVeleroFromStoreInternal(cmd.Context(), clientset, upgradeOptions.Namespace, upgradeOptions.KotsadmOptions, v.GetBool("wait-for-velero")); err != nil {
-					return errors.Wrap(err, "failed to install velero")
+					// don't fail if velero fails to install, as the admin console can still function without it
+					log.Error(errors.Wrap(err, "failed to install velero"))
 				}
 			}
 
