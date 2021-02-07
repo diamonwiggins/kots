@@ -361,7 +361,7 @@ func InstallCmd() *cobra.Command {
 	cmd.Flags().String("airgap-bundle", "", "path to the application airgap bundle where application metadata will be loaded from")
 	cmd.Flags().Bool("airgap", false, "set to true to run install in airgapped mode. setting --airgap-bundle implies --airgap=true.")
 	cmd.Flags().Bool("skip-preflights", false, "set to true to skip preflight checks")
-	cmd.Flags().Bool("wait-for-velero", true, "wait for Velero to be ready")
+	cmd.Flags().Bool("wait-for-velero", false, "wait for Velero to be ready")
 
 	cmd.Flags().String("repo", "", "repo uri to use when installing a helm chart")
 	cmd.Flags().StringSlice("set", []string{}, "values to pass to helm when running helm template")

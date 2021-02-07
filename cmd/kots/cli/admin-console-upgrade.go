@@ -115,7 +115,7 @@ func AdminConsoleUpgradeCmd() *cobra.Command {
 	cmd.Flags().String("registry-password", "", "password to use to authenticate with the registry")
 	cmd.Flags().String("kotsadm-namespace", "", "set to override the namespace of kotsadm image. this may create an incompatible deployment because the version of kots and kotsadm are designed to work together")
 	cmd.Flags().String("wait-duration", "2m", "timeout out to be used while waiting for individual components to be ready.  must be in Go duration format (eg: 10s, 2m)")
-	cmd.Flags().Bool("wait-for-velero", true, "wait for Velero to be ready")
+	cmd.Flags().Bool("wait-for-velero", false, "wait for Velero to be ready")
 	cmd.Flags().MarkHidden("force-upgrade-kurl")
 	cmd.Flags().MarkHidden("kotsadm-tag")
 	cmd.Flags().MarkHidden("kotsadm-namespace")
