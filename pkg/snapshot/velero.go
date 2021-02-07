@@ -13,7 +13,6 @@ import (
 	kotsadmtypes "github.com/replicatedhq/kots/pkg/kotsadm/types"
 	kotsadmversion "github.com/replicatedhq/kots/pkg/kotsadm/version"
 	"github.com/replicatedhq/kots/pkg/kotsutil"
-	"github.com/replicatedhq/kots/pkg/snapshot/types"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/client"
 	veleroclientv1 "github.com/vmware-tanzu/velero/pkg/generated/clientset/versioned/typed/velero/v1"
@@ -215,26 +214,70 @@ func rewriteVeleroImages(ctx context.Context, clientset kubernetes.Interface, ko
 	return
 }
 
-func InstallVeleroFromNFSStore(ctx context.Context, clientset kubernetes.Interface, nfsStore *types.StoreNFS, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions, wait bool) error {
-	nfsCreds, err := buildAWSCredentials(nfsStore.AccessKeyID, nfsStore.SecretAccessKey)
+func InstallVeleroFromStoreInternal(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions, wait bool) error {
+	storeInternal, bucketName, err := buildStoreInternal(ctx, clientset, kotsadmNamespace)
+	if err != nil {
+		return errors.Wrap(err, "failed to build internal store")
+	}
+
+	publicURL := getStoreInternalPublicURL(clientset, storeInternal, kotsadmNamespace)
+
+	// make sure default bucket exists
+	// we use publicUrl instead of endpoint since it has to be reachable from the CLI too
+	err = createS3Bucket(publicURL, storeInternal.Region, storeInternal.AccessKeyID, storeInternal.SecretAccessKey, bucketName)
+	if err != nil {
+		return errors.Wrap(err, "failed to create default bucket")
+	}
+
+	creds, err := buildAWSCredentials(storeInternal.AccessKeyID, storeInternal.SecretAccessKey)
 	if err != nil {
 		return errors.Wrap(err, "failed to format credentials")
 	}
 
-	publicURL := fmt.Sprintf("http://%s:%d", nfsStore.ObjectStoreClusterIP, NFSMinioServicePort)
+	veleroInstallOptions := VeleroInstallOptions{
+		ProviderName: "aws",
+		BucketName:   bucketName,
+		SecretData:   creds,
+		BackupStorageConfig: map[string]string{
+			"region":           storeInternal.Region,
+			"s3ForcePathStyle": "true",
+			"s3Url":            storeInternal.Endpoint,
+			"publicUrl":        publicURL,
+		},
+		VolumeSnapshotConfig: map[string]string{
+			"region": storeInternal.Region,
+		},
+		Wait: wait,
+	}
+
+	return InstallVelero(ctx, clientset, veleroInstallOptions, kotsadmNamespace, kotsadmRegistryOptions)
+}
+
+func InstallVeleroFromStoreNFS(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions, wait bool) error {
+	storeNFS, err := buildStoreNFS(ctx, clientset, kotsadmNamespace)
+	if err != nil {
+		return errors.Wrap(err, "failed to build nfs store")
+	}
+
+	nfsCreds, err := buildAWSCredentials(storeNFS.AccessKeyID, storeNFS.SecretAccessKey)
+	if err != nil {
+		return errors.Wrap(err, "failed to format credentials")
+	}
+
+	publicURL := getStoreNFSPublicURL(storeNFS)
 
 	veleroInstallOptions := VeleroInstallOptions{
 		ProviderName: NFSMinioProvider,
 		BucketName:   NFSMinioBucketName,
 		SecretData:   nfsCreds,
 		BackupStorageConfig: map[string]string{
-			"region":           NFSMinioRegion,
+			"region":           storeNFS.Region,
 			"s3ForcePathStyle": "true",
-			"s3Url":            nfsStore.Endpoint,
+			"s3Url":            storeNFS.Endpoint,
 			"publicUrl":        publicURL,
 		},
 		VolumeSnapshotConfig: map[string]string{
-			"region": NFSMinioRegion,
+			"region": storeNFS.Region,
 		},
 		Wait: wait,
 	}
@@ -389,8 +432,8 @@ func listPossibleResticDaemonsets(clientset *kubernetes.Clientset, namespace str
 	return append(daemonsets.Items, helmDaemonsets.Items...), nil
 }
 
-// RestartVelero will restart velero (and restic)
-func RestartVelero() error {
+// restartVelero will restart velero (and restic)
+func restartVelero() error {
 	cfg, err := config.GetConfig()
 	if err != nil {
 		return errors.Wrap(err, "failed to get cluster config")

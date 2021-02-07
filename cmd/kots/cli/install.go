@@ -26,6 +26,7 @@ import (
 	"github.com/replicatedhq/kots/pkg/kotsutil"
 	"github.com/replicatedhq/kots/pkg/logger"
 	"github.com/replicatedhq/kots/pkg/pull"
+	"github.com/replicatedhq/kots/pkg/snapshot"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -237,7 +238,6 @@ func InstallCmd() *cobra.Command {
 				}
 			}
 
-			// port forward
 			clientset, err := k8sutil.GetClientset(kubernetesConfigFlags)
 			if err != nil {
 				return errors.Wrap(err, "failed to get clientset")
@@ -251,6 +251,19 @@ func InstallCmd() *cobra.Command {
 				return errors.Wrap(err, "failed to wait for web")
 			}
 
+			veleroNamespace, err := snapshot.DetectVeleroNamespace()
+			if err != nil {
+				return errors.Wrap(err, "failed to detect velero namespace")
+			}
+			if veleroNamespace == "" {
+				// velero not found, install and configure velero
+				log.ActionWithoutSpinner("Installing Velero")
+				if err := snapshot.InstallVeleroFromStoreInternal(cmd.Context(), clientset, namespace, deployOptions.KotsadmOptions, v.GetBool("wait-for-velero")); err != nil {
+					return errors.Wrap(err, "failed to install velero")
+				}
+			}
+
+			// port forward
 			stopCh := make(chan struct{})
 			defer close(stopCh)
 
@@ -347,6 +360,7 @@ func InstallCmd() *cobra.Command {
 	cmd.Flags().String("airgap-bundle", "", "path to the application airgap bundle where application metadata will be loaded from")
 	cmd.Flags().Bool("airgap", false, "set to true to run install in airgapped mode. setting --airgap-bundle implies --airgap=true.")
 	cmd.Flags().Bool("skip-preflights", false, "set to true to skip preflight checks")
+	cmd.Flags().Bool("wait-for-velero", true, "wait for Velero to be ready")
 
 	cmd.Flags().String("repo", "", "repo uri to use when installing a helm chart")
 	cmd.Flags().StringSlice("set", []string{}, "values to pass to helm when running helm template")

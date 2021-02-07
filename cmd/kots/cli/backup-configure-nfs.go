@@ -97,12 +97,7 @@ func BackupConfigureNFSCmd() *cobra.Command {
 
 				log.ActionWithoutSpinner("Installing and configuring Velero")
 
-				nfsStore, err := snapshot.BuildNFSStore(cmd.Context(), clientset, namespace)
-				if err != nil {
-					return errors.Wrap(err, "failed to build nfs store")
-				}
-
-				if err := snapshot.InstallVeleroFromNFSStore(cmd.Context(), clientset, nfsStore, namespace, *registryOptions, v.GetBool("wait-for-velero")); err != nil {
+				if err := snapshot.InstallVeleroFromStoreNFS(cmd.Context(), clientset, namespace, *registryOptions, v.GetBool("wait-for-velero")); err != nil {
 					return errors.Wrap(err, "failed to install velero")
 				}
 
