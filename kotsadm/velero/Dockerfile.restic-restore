@@ -1,0 +1,7 @@
+FROM velero/velero-restic-restore-helper:v1.5.1
+
+RUN apk update && apk add ca-certificates && rm -rf /var/cache/apk/*
+
+RUN adduser -h /home/restic-restore -s /bin/sh -u 1001 -D restic-restore
+USER restic-restore
+ENV HOME /home/restic-restore
