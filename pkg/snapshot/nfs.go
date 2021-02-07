@@ -113,10 +113,6 @@ func DeployNFSMinio(ctx context.Context, clientset kubernetes.Interface, deployO
 		if err != nil {
 			return errors.Wrap(err, "failed to wait for nfs minio deployment to be ready")
 		}
-		err = createNFSMinioDefaultBucket(ctx, clientset, deployOptions.Namespace)
-		if err != nil {
-			return errors.Wrap(err, "failed to create nfs minio default bucket")
-		}
 	}
 
 	return nil
@@ -711,24 +707,6 @@ func nfsMinioConfigPod(clientset kubernetes.Interface, deployOptions NFSDeployOp
 
 func getNFSResetWarningMsg(nfsPath string) string {
 	return fmt.Sprintf("The %s directory was previously configured by a different minio instance.\nProceeding will re-configure it to be used only by this new minio instance, and any other minio instance using this location will no longer have access.\nIf you are attempting to fully restore a prior installation, such as a disaster recovery scenario, this action is expected.", nfsPath)
-}
-
-func createNFSMinioDefaultBucket(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
-	secret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, NFSMinioSecretName, metav1.GetOptions{})
-	if err != nil {
-		return errors.Wrap(err, "failed to get nfs minio secret")
-	}
-
-	service, err := clientset.CoreV1().Services(namespace).Get(ctx, NFSMinioServiceName, metav1.GetOptions{})
-	if err != nil {
-		return errors.Wrap(err, "failed to get nfs minio service")
-	}
-
-	endpoint := fmt.Sprintf("http://%s:%d", service.Spec.ClusterIP, service.Spec.Ports[0].Port)
-	accessKeyID := string(secret.Data["MINIO_ACCESS_KEY"])
-	secretAccessKey := string(secret.Data["MINIO_SECRET_KEY"])
-
-	return createS3Bucket(endpoint, NFSMinioRegion, accessKeyID, secretAccessKey, NFSMinioBucketName)
 }
 
 func GetCurrentNFSConfig(ctx context.Context, namespace string) (*types.NFSConfig, error) {

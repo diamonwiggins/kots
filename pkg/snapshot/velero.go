@@ -220,13 +220,9 @@ func InstallVeleroFromStoreInternal(ctx context.Context, clientset kubernetes.In
 		return errors.Wrap(err, "failed to build internal store")
 	}
 
-	publicURL := getStoreInternalPublicURL(clientset, storeInternal, kotsadmNamespace)
-
-	// make sure default bucket exists
-	// we use publicUrl instead of endpoint since it has to be reachable from the CLI too
-	err = createS3Bucket(publicURL, storeInternal.Region, storeInternal.AccessKeyID, storeInternal.SecretAccessKey, bucketName)
+	err = validateInternal(storeInternal, bucketName, kotsadmNamespace)
 	if err != nil {
-		return errors.Wrap(err, "failed to create default bucket")
+		return errors.Wrap(err, "failed to validate internal store")
 	}
 
 	creds, err := buildAWSCredentials(storeInternal.AccessKeyID, storeInternal.SecretAccessKey)
@@ -242,7 +238,7 @@ func InstallVeleroFromStoreInternal(ctx context.Context, clientset kubernetes.In
 			"region":           storeInternal.Region,
 			"s3ForcePathStyle": "true",
 			"s3Url":            storeInternal.Endpoint,
-			"publicUrl":        publicURL,
+			"publicUrl":        getStoreInternalPublicURL(clientset, storeInternal, kotsadmNamespace),
 		},
 		VolumeSnapshotConfig: map[string]string{
 			"region": storeInternal.Region,
@@ -259,12 +255,15 @@ func InstallVeleroFromStoreNFS(ctx context.Context, clientset kubernetes.Interfa
 		return errors.Wrap(err, "failed to build nfs store")
 	}
 
+	err = validateNFS(storeNFS, NFSMinioBucketName)
+	if err != nil {
+		return errors.Wrap(err, "failed to validate nfs store")
+	}
+
 	nfsCreds, err := buildAWSCredentials(storeNFS.AccessKeyID, storeNFS.SecretAccessKey)
 	if err != nil {
 		return errors.Wrap(err, "failed to format credentials")
 	}
-
-	publicURL := getStoreNFSPublicURL(storeNFS)
 
 	veleroInstallOptions := VeleroInstallOptions{
 		ProviderName: NFSMinioProvider,
@@ -274,7 +273,7 @@ func InstallVeleroFromStoreNFS(ctx context.Context, clientset kubernetes.Interfa
 			"region":           storeNFS.Region,
 			"s3ForcePathStyle": "true",
 			"s3Url":            storeNFS.Endpoint,
-			"publicUrl":        publicURL,
+			"publicUrl":        getStoreNFSPublicURL(storeNFS),
 		},
 		VolumeSnapshotConfig: map[string]string{
 			"region": storeNFS.Region,

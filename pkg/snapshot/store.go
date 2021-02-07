@@ -1153,6 +1153,7 @@ func validateOther(storeOther *types.StoreOther, bucket string) error {
 	return nil
 }
 
+// validateInternal will validate that the internal store is reachable and will also ensure that the bucket exists
 func validateInternal(storeInternal *types.StoreInternal, bucket string, kotsadmNamespace string) error {
 	cfg, err := config.GetConfig()
 	if err != nil {
@@ -1167,58 +1168,15 @@ func validateInternal(storeInternal *types.StoreInternal, bucket string, kotsadm
 	// we use publicUrl instead of endpoint since it has to be reachable from the CLI too
 	publicURL := getStoreInternalPublicURL(clientset, storeInternal, kotsadmNamespace)
 
-	s3Config := &aws.Config{
-		Region:           aws.String(storeInternal.Region),
-		Endpoint:         aws.String(publicURL),
-		DisableSSL:       aws.Bool(true), // TODO: this needs to be configurable
-		S3ForcePathStyle: aws.Bool(true),
-	}
-
-	if storeInternal.AccessKeyID != "" && storeInternal.SecretAccessKey != "" {
-		s3Config.Credentials = credentials.NewStaticCredentials(storeInternal.AccessKeyID, storeInternal.SecretAccessKey, "")
-	}
-
-	newSession := session.New(s3Config)
-	s3Client := s3.New(newSession)
-
-	_, err = s3Client.HeadBucket(&s3.HeadBucketInput{
-		Bucket: aws.String(bucket),
-	})
-
-	if err != nil {
-		return errors.Wrap(err, "bucket does not exist")
-	}
-
-	return nil
+	return createS3Bucket(publicURL, storeInternal.Region, storeInternal.AccessKeyID, storeInternal.SecretAccessKey, bucket)
 }
 
+// validateNFS will validate that the NFS store is reachable and will also ensure that the bucket exists
 func validateNFS(storeNFS *types.StoreNFS, bucket string) error {
 	// we use publicUrl instead of endpoint since it has to be reachable from the CLI too
 	publicURL := getStoreNFSPublicURL(storeNFS)
 
-	s3Config := &aws.Config{
-		Region:           aws.String(storeNFS.Region),
-		Endpoint:         aws.String(publicURL),
-		DisableSSL:       aws.Bool(true), // TODO: this needs to be configurable
-		S3ForcePathStyle: aws.Bool(true),
-	}
-
-	if storeNFS.AccessKeyID != "" && storeNFS.SecretAccessKey != "" {
-		s3Config.Credentials = credentials.NewStaticCredentials(storeNFS.AccessKeyID, storeNFS.SecretAccessKey, "")
-	}
-
-	newSession := session.New(s3Config)
-	s3Client := s3.New(newSession)
-
-	_, err := s3Client.HeadBucket(&s3.HeadBucketInput{
-		Bucket: aws.String(bucket),
-	})
-
-	if err != nil {
-		return errors.Wrap(err, "bucket does not exist")
-	}
-
-	return nil
+	return createS3Bucket(publicURL, storeNFS.Region, storeNFS.AccessKeyID, storeNFS.SecretAccessKey, bucket)
 }
 
 func createS3Bucket(endpoint, region, accessKeyID, secretAccessKey, bucketName string) error {
