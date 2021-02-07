@@ -298,7 +298,6 @@ class SnapshotSettings extends Component {
             isLicenseUpload={isLicenseUpload}
             configureSnapshotsModal={this.state.configureSnapshotsModal}
             toggleConfigureModal={this.toggleConfigureModal}
-            isKurlEnabled={this.props.isKurlEnabled}
 
             showResetNFSWarningModal={this.state.showResetNFSWarningModal}
             resetNFSWarningMessage={this.state.resetNFSWarningMessage}

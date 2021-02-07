@@ -690,12 +690,10 @@ class SnapshotStorageDestination extends Component {
               value: "other",
               label: "Other S3-Compatible Storage",
             });
-            if (snapshotSettings.isKurl) {
-              availableDestinations.push({
-                value: "internal",
-                label: "Internal Storage (Default)",
-              });
-            }
+            availableDestinations.push({
+              value: "internal",
+              label: "Internal Storage (Default)",
+            });
             availableDestinations.push({
               value: "nfs",
               label: "Network File System - NFS",
@@ -786,7 +784,7 @@ class SnapshotStorageDestination extends Component {
               </div>
             </div>
           </div>
-          <SnapshotSchedule isVeleroRunning={snapshotSettings?.isVeleroRunning} isKurlEnabled={this.props.isKurlEnabled} />
+          <SnapshotSchedule isVeleroRunning={snapshotSettings?.isVeleroRunning} />
         </div>
 
         {this.props.configureSnapshotsModal &&
