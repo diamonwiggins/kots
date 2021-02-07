@@ -82,20 +82,21 @@ func AdminConsoleUpgradeCmd() *cobra.Command {
 				return errors.Wrap(err, "failed to upgrade")
 			}
 
-			veleroNamespace, err := snapshot.DetectVeleroNamespace()
-			if err != nil {
-				return errors.Wrap(err, "failed to detect velero namespace")
-			}
-			if veleroNamespace == "" {
-				// velero not found, install and configure velero
-				log.ActionWithoutSpinner("Installing Velero")
+			if !v.GetBool("exclude-velero") {
 				clientset, err := k8sutil.GetClientset(kubernetesConfigFlags)
 				if err != nil {
 					return errors.Wrap(err, "failed to get clientset")
 				}
-				if err := snapshot.InstallVeleroFromStoreInternal(cmd.Context(), clientset, upgradeOptions.Namespace, upgradeOptions.KotsadmOptions, v.GetBool("wait-for-velero")); err != nil {
-					// don't fail if velero fails to install, as the admin console can still function without it
-					log.Error(errors.Wrap(err, "failed to install velero"))
+				veleroNamespace, err := snapshot.DetectVeleroNamespace()
+				if err != nil {
+					return errors.Wrap(err, "failed to detect velero namespace")
+				}
+				if veleroNamespace == "" && k8sutil.IsKotsadmClusterScoped(cmd.Context(), clientset) {
+					// velero not found, install and configure velero
+					log.ActionWithoutSpinner("Installing Velero")
+					if err := snapshot.InstallVeleroFromStoreInternal(cmd.Context(), clientset, upgradeOptions.Namespace, upgradeOptions.KotsadmOptions, v.GetBool("wait-for-velero")); err != nil {
+						return errors.Wrap(err, "failed to install velero")
+					}
 				}
 			}
 
@@ -116,6 +117,7 @@ func AdminConsoleUpgradeCmd() *cobra.Command {
 	cmd.Flags().String("kotsadm-namespace", "", "set to override the namespace of kotsadm image. this may create an incompatible deployment because the version of kots and kotsadm are designed to work together")
 	cmd.Flags().String("wait-duration", "2m", "timeout out to be used while waiting for individual components to be ready.  must be in Go duration format (eg: 10s, 2m)")
 	cmd.Flags().Bool("wait-for-velero", false, "wait for Velero to be ready")
+	cmd.Flags().Bool("exclude-velero", false, "set to true to exclude Velero")
 	cmd.Flags().MarkHidden("force-upgrade-kurl")
 	cmd.Flags().MarkHidden("kotsadm-tag")
 	cmd.Flags().MarkHidden("kotsadm-namespace")

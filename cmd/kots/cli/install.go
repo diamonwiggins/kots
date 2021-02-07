@@ -251,16 +251,17 @@ func InstallCmd() *cobra.Command {
 				return errors.Wrap(err, "failed to wait for web")
 			}
 
-			veleroNamespace, err := snapshot.DetectVeleroNamespace()
-			if err != nil {
-				return errors.Wrap(err, "failed to detect velero namespace")
-			}
-			if veleroNamespace == "" {
-				// velero not found, install and configure velero
-				log.ActionWithoutSpinner("Installing Velero")
-				if err := snapshot.InstallVeleroFromStoreInternal(cmd.Context(), clientset, namespace, deployOptions.KotsadmOptions, v.GetBool("wait-for-velero")); err != nil {
-					// don't fail if velero fails to install, as the admin console can still function without it
-					log.Error(errors.Wrap(err, "failed to install velero"))
+			if !v.GetBool("exclude-velero") && !deployOptions.ExcludeAdminConsole {
+				veleroNamespace, err := snapshot.DetectVeleroNamespace()
+				if err != nil {
+					return errors.Wrap(err, "failed to detect velero namespace")
+				}
+				if veleroNamespace == "" && k8sutil.IsKotsadmClusterScoped(cmd.Context(), clientset) {
+					// velero not found, install and configure velero
+					log.ActionWithoutSpinner("Installing Velero")
+					if err := snapshot.InstallVeleroFromStoreInternal(cmd.Context(), clientset, namespace, deployOptions.KotsadmOptions, v.GetBool("wait-for-velero")); err != nil {
+						return errors.Wrap(err, "failed to install velero")
+					}
 				}
 			}
 
@@ -362,6 +363,7 @@ func InstallCmd() *cobra.Command {
 	cmd.Flags().Bool("airgap", false, "set to true to run install in airgapped mode. setting --airgap-bundle implies --airgap=true.")
 	cmd.Flags().Bool("skip-preflights", false, "set to true to skip preflight checks")
 	cmd.Flags().Bool("wait-for-velero", false, "wait for Velero to be ready")
+	cmd.Flags().Bool("exclude-velero", false, "set to true to exclude Velero")
 
 	cmd.Flags().String("repo", "", "repo uri to use when installing a helm chart")
 	cmd.Flags().StringSlice("set", []string{}, "values to pass to helm when running helm template")
