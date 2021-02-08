@@ -32,10 +32,13 @@ var (
 )
 
 const (
-	veleroNamespace             = velerov1api.DefaultNamespace
-	veleroDeploymentName        = "velero"
-	defaultVeleroImage          = "velero/velero:v1.5.1"
-	defaultVeleroAWSPluginImage = "velero/velero-plugin-for-aws:v1.1.0"
+	veleroNamespace                       = velerov1api.DefaultNamespace
+	veleroDeploymentName                  = "velero"
+	defaultVeleroImage                    = "velero/velero:v1.5.1"
+	defaultVeleroAWSPluginImage           = "velero/velero-plugin-for-aws:v1.1.0"
+	defaultVeleroResticRestoreHelperImage = "velero/velero-restic-restore-helper:v1.5.1"
+	resticConfigMapName                   = "restic-restore-action-config"
+	resticDaemonSetName                   = "restic"
 )
 
 type VeleroInstallOptions struct {
@@ -58,7 +61,7 @@ type VeleroStatus struct {
 }
 
 func InstallVelero(ctx context.Context, clientset kubernetes.Interface, veleroInstallOptions VeleroInstallOptions, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) error {
-	veleroImage, pluginImage, _, err := rewriteVeleroImages(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions)
+	veleroImage, awsPluginImage, _, _, err := rewriteVeleroImages(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions)
 	if err != nil {
 		return errors.Wrap(err, "failed to rewrite images")
 	}
@@ -85,7 +88,7 @@ func InstallVelero(ctx context.Context, clientset kubernetes.Interface, veleroIn
 		UseVolumeSnapshots:      true,
 		BSLConfig:               veleroInstallOptions.BackupStorageConfig,
 		VSLConfig:               veleroInstallOptions.VolumeSnapshotConfig,
-		Plugins:                 []string{pluginImage},
+		Plugins:                 []string{awsPluginImage},
 		NoDefaultBackupLocation: false,
 		DefaultVolumesToRestic:  true,
 	}
@@ -107,9 +110,8 @@ func InstallVelero(ctx context.Context, clientset kubernetes.Interface, veleroIn
 		return errors.Wrap(err, errorMsg)
 	}
 
-	// this is necessary to add/remove the imagePullSecrets and to update the images in case the deployment has been previously created
-	if err := ConfigureVeleroDeployment(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions); err != nil {
-		return errors.Wrap(err, "failed to configure velero deployment")
+	if err := ConfigureVeleroImages(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions); err != nil {
+		return errors.Wrap(err, "failed to configure velero images")
 	}
 
 	if veleroInstallOptions.Wait {
@@ -122,9 +124,14 @@ func InstallVelero(ctx context.Context, clientset kubernetes.Interface, veleroIn
 	return nil
 }
 
-// ConfigureVeleroDeployment will rewrite velero images based on the provided kotsadm registry options and will also add/remove imagePullSecrets if necessary
-func ConfigureVeleroDeployment(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) error {
-	veleroImage, pluginImage, imagePullSecrets, err := rewriteVeleroImages(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions)
+// ConfigureVeleroImages will rewrite velero/restic images based on the provided kotsadm registry options and will also add/remove imagePullSecrets if necessary
+// no-op on kurl (embedded) clusters, because we don't rewrite images in kurl
+func ConfigureVeleroImages(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) error {
+	if kotsutil.IsKurl(clientset) && kotsadmNamespace == metav1.NamespaceDefault {
+		return nil
+	}
+
+	veleroImage, awsPluginImage, resticRestoreHelperImage, imagePullSecrets, err := rewriteVeleroImages(ctx, clientset, kotsadmNamespace, kotsadmRegistryOptions)
 	if err != nil {
 		return errors.Wrap(err, "failed to rewrite images")
 	}
@@ -133,21 +140,84 @@ func ConfigureVeleroDeployment(ctx context.Context, clientset kubernetes.Interfa
 		return errors.Wrap(err, "failed to ensure private kotsadm registry secret")
 	}
 
-	d, err := clientset.AppsV1().Deployments(veleroNamespace).Get(ctx, veleroDeploymentName, metav1.GetOptions{})
+	veleroDeployment, err := clientset.AppsV1().Deployments(veleroNamespace).Get(ctx, veleroDeploymentName, metav1.GetOptions{})
 	if err != nil {
 		return errors.Wrap(err, "failed to get velero deployment")
 	}
 
-	d.Spec.Template.Spec.ImagePullSecrets = imagePullSecrets
-	d.Spec.Template.Spec.InitContainers[0].Image = pluginImage
-	d.Spec.Template.Spec.Containers[0].Image = veleroImage
+	veleroDeployment.Spec.Template.Spec.ImagePullSecrets = imagePullSecrets
+	veleroDeployment.Spec.Template.Spec.InitContainers[0].Image = awsPluginImage
+	veleroDeployment.Spec.Template.Spec.Containers[0].Image = veleroImage
 
-	_, err = clientset.AppsV1().Deployments(veleroNamespace).Update(ctx, d, metav1.UpdateOptions{})
+	_, err = clientset.AppsV1().Deployments(veleroNamespace).Update(ctx, veleroDeployment, metav1.UpdateOptions{})
 	if err != nil {
 		return errors.Wrap(err, "failed to update velero deployment")
 	}
 
+	// configure restic, ref: https://velero.io/docs/v1.5/restic/#configure-restic-daemonset-spec
+	// check if image has been rewritten
+	if resticRestoreHelperImage != defaultVeleroResticRestoreHelperImage {
+		// create/update restic configmap to rewrite the velero-restic-restore-helper image
+		resticConfigMap, err := clientset.CoreV1().ConfigMaps(veleroNamespace).Get(ctx, resticConfigMapName, metav1.GetOptions{})
+		if err != nil && !kuberneteserrors.IsNotFound(err) {
+			return errors.Wrap(err, "failed to get restic configmap")
+		}
+		if kuberneteserrors.IsNotFound(err) {
+			resticConfigMap = resticConfigMapResource(resticRestoreHelperImage)
+			_, err := clientset.CoreV1().ConfigMaps(veleroNamespace).Create(ctx, resticConfigMap, metav1.CreateOptions{})
+			if err != nil {
+				return errors.Wrap(err, "failed to create restic configmap")
+			}
+		} else {
+			if resticConfigMap.Data == nil {
+				resticConfigMap.Data = map[string]string{}
+			}
+			resticConfigMap.Data["image"] = resticRestoreHelperImage
+			_, err := clientset.CoreV1().ConfigMaps(veleroNamespace).Update(ctx, resticConfigMap, metav1.UpdateOptions{})
+			if err != nil {
+				return errors.Wrap(err, "failed to update restic configmap")
+			}
+		}
+	} else {
+		err := clientset.CoreV1().ConfigMaps(veleroNamespace).Delete(ctx, resticConfigMapName, metav1.DeleteOptions{})
+		if err != nil && !kuberneteserrors.IsNotFound(err) {
+			return errors.Wrap(err, "failed to delete restic configmap")
+		}
+	}
+
+	resticDaemonSet, err := clientset.AppsV1().DaemonSets(veleroNamespace).Get(ctx, resticDaemonSetName, metav1.GetOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to get restic daemonset")
+	}
+
+	resticDaemonSet.Spec.Template.Spec.ImagePullSecrets = imagePullSecrets
+	resticDaemonSet.Spec.Template.Spec.Containers[0].Image = veleroImage
+
+	_, err = clientset.AppsV1().DaemonSets(veleroNamespace).Update(ctx, resticDaemonSet, metav1.UpdateOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to update restic daemonset")
+	}
+
 	return nil
+}
+
+func resticConfigMapResource(image string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "v1",
+			Kind:       "ConfigMap",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: resticConfigMapName,
+			Labels: map[string]string{
+				"velero.io/plugin-config": "",
+				"velero.io/restic":        "RestoreItemAction",
+			},
+		},
+		Data: map[string]string{
+			"image": image,
+		},
+	}
 }
 
 func WaitForVeleroReady(ctx context.Context, clientset kubernetes.Interface, factory *client.DynamicFactory) error {
@@ -191,9 +261,10 @@ func getVeleroFactory() (*client.DynamicFactory, error) {
 	return &factory, nil
 }
 
-func rewriteVeleroImages(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) (veleroImage string, pluginImage string, imagePullSecrets []corev1.LocalObjectReference, finalErr error) {
+func rewriteVeleroImages(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string, kotsadmRegistryOptions kotsadmtypes.KotsadmOptions) (veleroImage string, awsPluginImage string, resticRestoreHelperImage string, imagePullSecrets []corev1.LocalObjectReference, finalErr error) {
 	veleroImage = defaultVeleroImage
-	pluginImage = defaultVeleroAWSPluginImage
+	awsPluginImage = defaultVeleroAWSPluginImage
+	resticRestoreHelperImage = defaultVeleroResticRestoreHelperImage
 	imagePullSecrets = []corev1.LocalObjectReference{}
 
 	if !kotsutil.IsKurl(clientset) || kotsadmNamespace != metav1.NamespaceDefault {
@@ -204,9 +275,14 @@ func rewriteVeleroImages(ctx context.Context, clientset kubernetes.Interface, ko
 			finalErr = errors.Wrap(err, "failed to rewrite velero image")
 			return
 		}
-		pluginImage, _, err = imageRewriteFn(pluginImage, false)
+		awsPluginImage, _, err = imageRewriteFn(awsPluginImage, false)
 		if err != nil {
-			finalErr = errors.Wrap(err, "failed to rewrite plugin image")
+			finalErr = errors.Wrap(err, "failed to rewrite aws plugin image")
+			return
+		}
+		resticRestoreHelperImage, _, err = imageRewriteFn(resticRestoreHelperImage, false)
+		if err != nil {
+			finalErr = errors.Wrap(err, "failed to rewrite restic restore helper image")
 			return
 		}
 	}

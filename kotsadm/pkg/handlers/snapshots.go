@@ -171,11 +171,11 @@ func (h *Handler) ConfigureNFSSnapshots(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// velero is already installed, only configure velero deployment and the store
+	// velero is already installed, only configure velero images and the store
 
-	err = kotssnapshot.ConfigureVeleroDeployment(r.Context(), clientset, namespace, registryOptions)
+	err = kotssnapshot.ConfigureVeleroImages(r.Context(), clientset, namespace, registryOptions)
 	if err != nil {
-		errMsg := "failed to configure velero deployment"
+		errMsg := "failed to configure velero images"
 		response.Error = errMsg
 		logger.Error(errors.Wrap(err, errMsg))
 		w.WriteHeader(http.StatusInternalServerError)
