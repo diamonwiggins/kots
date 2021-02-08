@@ -6,7 +6,6 @@ import find from "lodash/find";
 import Modal from "react-modal";
 
 import ConfigureSnapshots from "./ConfigureSnapshots";
-import CodeSnippet from "../shared/CodeSnippet";
 import Loader from "../shared/Loader";
 
 import "../../scss/components/shared/SnapshotForm.scss";
@@ -844,15 +843,8 @@ class SnapshotStorageDestination extends Component {
             className="Modal SmallSize"
           >
             <div className="Modal-body">
-              <p className="u-fontSize--largest u-fontWeight--bold u-color--tundora u-marginBottom--10">Minimal RBAC</p>
-              <p className="u-fontSize--normal u-fontWeight--normal u-color--dustyGray u-lineHeight--normal u-marginBottom--10"> We've detected that the Admin Console is running with minimal RBAC privileges. To configure NFS and install Velero, please run the following command: </p>
-              <CodeSnippet
-                language="bash"
-                canCopy={true}
-                onCopyText={<span className="u-color--chateauGreen">Command has been copied to your clipboard</span>}
-              >
-                {`kubectl kots backup configure-nfs --namespace ${this.props.configureNFSNamespace} --server ${this.state.tmpNFSServer} --path ${this.state.tmpNFSPath}`}
-              </CodeSnippet>
+              <p className="u-fontSize--largest u-fontWeight--bold u-color--tundora u-marginBottom--10">Minimal RBAC Support</p>
+              <p className="u-fontSize--normal u-fontWeight--normal u-color--dustyGray u-lineHeight--normal u-marginBottom--10"> We apologize, but we've detected that the Admin Console is running with minimal RBAC privileges. Currently, the snapshots functionality requires that the Admin Console has cluster-scoped access. </p>
               <div className="u-marginTop--20 flex justifyContent--flexStart">
                 <button type="button" className="btn blue primary" onClick={this.props.hideConfigureNFSMinimalRBACModal}>Ok, got it!</button>
               </div>

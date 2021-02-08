@@ -28,7 +28,6 @@ class SnapshotSettings extends Component {
 
     configuringNFS: false,
     configureNFSErrorMsg: "",
-    configureNFSNamespace: "",
     showConfigureNFSMinimalRBACModal: false,
     showConfigureNFSModal: false,
   };
@@ -211,7 +210,6 @@ class SnapshotSettings extends Component {
             showConfigureNFSModal: false,
             showConfigureNFSMinimalRBACModal: true,
             configureNFSErrorMsg: "",
-            configureNFSNamespace: response.namespace,
           });
           return;
         }
@@ -306,7 +304,6 @@ class SnapshotSettings extends Component {
             configureNFS={this.configureNFS}
             configuringNFS={this.state.configuringNFS}
             configureNFSErrorMsg={this.state.configureNFSErrorMsg}
-            configureNFSNamespace={this.state.configureNFSNamespace}
             showConfigureNFSModal={this.state.showConfigureNFSModal}
             toggleConfigureNFSModal={this.toggleConfigureNFSModal}
             showConfigureNFSMinimalRBACModal={this.state.showConfigureNFSMinimalRBACModal}

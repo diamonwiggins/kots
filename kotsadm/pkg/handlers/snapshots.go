@@ -30,7 +30,6 @@ import (
 type ConfigureNFSSnapshotsResponse struct {
 	Success              bool   `json:"success"`
 	Error                string `json:"error,omitempty"`
-	Namespace            string `json:"namespace,omitempty"`
 	IsMinimalRBACEnabled bool   `json:"isMinimalRBACEnabled,omitempty"`
 }
 
@@ -112,7 +111,6 @@ func (h *Handler) ConfigureNFSSnapshots(w http.ResponseWriter, r *http.Request) 
 
 	isMinimalRBACEnabled := !k8sutil.IsKotsadmClusterScoped(r.Context(), clientset)
 	if isMinimalRBACEnabled {
-		response.Namespace = namespace
 		response.IsMinimalRBACEnabled = true
 		JSON(w, http.StatusOK, response)
 		return
@@ -164,7 +162,6 @@ func (h *Handler) ConfigureNFSSnapshots(w http.ResponseWriter, r *http.Request) 
 		}
 
 		response.Success = true
-		response.Namespace = namespace
 		response.IsMinimalRBACEnabled = false
 
 		JSON(w, http.StatusOK, response)
@@ -205,7 +202,6 @@ func (h *Handler) ConfigureNFSSnapshots(w http.ResponseWriter, r *http.Request) 
 	}
 
 	response.Success = true
-	response.Namespace = namespace
 	response.IsMinimalRBACEnabled = false
 
 	JSON(w, http.StatusOK, response)
