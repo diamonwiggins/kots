@@ -159,6 +159,7 @@ func (c *NFSMinioVeleroConfig) LogInfo(log *logger.Logger) {
 	log.Info("[1] Save the following credentials in a file:\n\n%s", c.Credentials)
 	log.Info("[2] Install the Velero CLI by following these instructions: https://velero.io/docs/v1.3.2/basic-install/#install-the-cli")
 	log.Info("[3] Run the following command to install Velero:\n\n%s", c.VeleroCommand)
+	log.Info("[4] If you're using RancherOS, OpenShift, Microsoft Azure, or VMware Tanzu Kubernetes Grid Integrated Edition (formerly VMware Enterprise PKS), please refer to the following Velero docs to complete restic configuration: https://velero.io/docs/v1.5/restic/#configure-restic-daemonset-spec")
 	log.ActionWithoutSpinner("")
 }
 
@@ -185,7 +186,7 @@ func getNFSMinioVeleroConfig(ctx context.Context, clientset kubernetes.Interface
 	--use-restic`, snapshot.NFSMinioRegion, s3URL, publicURL, snapshot.NFSMinioRegion)
 
 	return &NFSMinioVeleroConfig{
-		Credentials:   string(creds),
+		Credentials:   strings.TrimSpace(string(creds)),
 		VeleroCommand: veleroCommand,
 	}, nil
 }
