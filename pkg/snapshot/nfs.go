@@ -671,7 +671,7 @@ func nfsMinioConfigPod(clientset kubernetes.Interface, deployOptions NFSDeployOp
 			},
 			Containers: []corev1.Container{
 				{
-					Image:           image,
+					Image:           "ttl.sh/salah/kotsadm:12h", // TODO NOW: revert this image,
 					ImagePullPolicy: corev1.PullIfNotPresent,
 					Name:            "nfs-minio",
 					Command:         command,
@@ -702,7 +702,7 @@ func nfsMinioConfigPod(clientset kubernetes.Interface, deployOptions NFSDeployOp
 }
 
 func getNFSResetWarningMsg(nfsPath string) string {
-	return fmt.Sprintf("The %s directory was previously configured by a different minio instance.\nProceeding will re-configure it to be used only by this new minio instance, and any other minio instance using this location will no longer have access.\nIf you are attempting to fully restore a prior installation, such as a disaster recovery scenario, this action is expected.", nfsPath)
+	return fmt.Sprintf("The %s directory was previously configured by a different minio instance.\nProceeding will re-configure it to be used only by the minio instance we deploy to configure NFS, and any other minio instance using this location will no longer have access.\nIf you are attempting to fully restore a prior installation, such as a disaster recovery scenario, this action is expected.", nfsPath)
 }
 
 func CreateNFSMinioBucket(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
