@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/fatih/color"
 
@@ -15,6 +17,7 @@ import (
 	"github.com/replicatedhq/kots/pkg/snapshot/types"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"k8s.io/client-go/kubernetes"
 )
 
 func BackupConfigureNFSCmd() *cobra.Command {
@@ -65,7 +68,6 @@ func BackupConfigureNFSCmd() *cobra.Command {
 					Path:   nfsPath,
 					Server: nfsServer,
 				},
-				Wait: true,
 			}
 			if err := snapshot.DeployNFSMinio(cmd.Context(), clientset, deployOptions, *registryOptions); err != nil {
 				if _, ok := errors.Cause(err).(*snapshot.ResetNFSError); ok {
@@ -86,33 +88,40 @@ func BackupConfigureNFSCmd() *cobra.Command {
 			}
 
 			log.FinishSpinner()
+			log.ActionWithSpinner("Waiting for NFS Minio to be ready")
+
+			err = k8sutil.WaitForDeploymentReady(cmd.Context(), clientset, namespace, snapshot.NFSMinioDeploymentName, time.Minute*2)
+			if err != nil {
+				log.FinishSpinnerWithError()
+				return errors.Wrap(err, "failed to wait for nfs minio")
+			}
+
+			log.FinishSpinner()
+			log.ActionWithSpinner("Creating Default Bucket")
+
+			err = snapshot.CreateNFSMinioBucket(cmd.Context(), clientset, namespace)
+			if err != nil {
+				log.FinishSpinnerWithError()
+				return errors.Wrap(err, "failed to create default bucket")
+			}
+
+			log.FinishSpinner()
 
 			veleroNamespace, err := snapshot.DetectVeleroNamespace()
 			if err != nil {
 				return errors.Wrap(err, "failed to detect velero namespace")
 			}
-
 			if veleroNamespace == "" {
-				// velero not found, install and configure velero
-
-				log.ActionWithoutSpinner("Installing and configuring Velero")
-
-				if err := snapshot.InstallVeleroFromStoreNFS(cmd.Context(), clientset, namespace, *registryOptions, v.GetBool("wait-for-velero")); err != nil {
-					return errors.Wrap(err, "failed to install velero")
+				c, err := getNFSMinioVeleroConfig(cmd.Context(), clientset, namespace)
+				if err != nil {
+					return errors.Wrap(err, "failed to get nfs minio velero config")
 				}
-
-				log.ActionWithoutSpinner("NFS configured successfully.")
-
+				log.ActionWithoutSpinner("NFS configuration for the Admin Console is successful, but no Velero installation has been detected.")
+				c.LogInfo(log)
 				return nil
 			}
 
 			log.ActionWithSpinner("Configuring Velero")
-
-			err = snapshot.ConfigureVeleroImages(cmd.Context(), clientset, namespace, *registryOptions)
-			if err != nil {
-				log.FinishSpinnerWithError()
-				return errors.Wrap(err, "failed to configure velero images")
-			}
 
 			configureStoreOptions := snapshot.ConfigureStoreOptions{
 				NFS:              true,
@@ -126,20 +135,6 @@ func BackupConfigureNFSCmd() *cobra.Command {
 
 			log.FinishSpinner()
 
-			if v.GetBool("wait-for-velero") {
-				log.ActionWithSpinner("Waiting for Velero to be ready")
-
-				err := snapshot.WaitForVeleroReady(cmd.Context(), clientset, nil)
-				if err != nil {
-					log.FinishSpinnerWithError()
-					return errors.Wrap(err, "failed to wait for velero")
-				}
-
-				log.FinishSpinner()
-			}
-
-			log.ActionWithoutSpinner("NFS configured successfully.")
-
 			return nil
 		},
 	}
@@ -147,12 +142,52 @@ func BackupConfigureNFSCmd() *cobra.Command {
 	cmd.Flags().String("path", "", "path that is exported by the NFS server")
 	cmd.Flags().String("server", "", "the hostname or IP address of the NFS server")
 	cmd.Flags().StringP("namespace", "n", "", "the namespace in which kots/kotsadm is installed")
-	cmd.Flags().Bool("wait-for-velero", true, "wait for Velero to be ready")
 	cmd.Flags().Bool("airgap", false, "set to true to run in airgapped mode")
 
 	registryFlags(cmd.Flags())
 
 	return cmd
+}
+
+type NFSMinioVeleroConfig struct {
+	Credentials   string
+	VeleroCommand string
+}
+
+func (c *NFSMinioVeleroConfig) LogInfo(log *logger.Logger) {
+	log.ActionWithoutSpinner("Follow these instructions to set up Velero:\n")
+	log.Info("[1] Save the following credentials in a file:\n\n%s", c.Credentials)
+	log.Info("[2] Install the Velero CLI by following these instructions: https://velero.io/docs/v1.3.2/basic-install/#install-the-cli")
+	log.Info("[3] Run the following command to install Velero:\n\n%s", c.VeleroCommand)
+	log.ActionWithoutSpinner("")
+}
+
+func getNFSMinioVeleroConfig(ctx context.Context, clientset kubernetes.Interface, namespace string) (*NFSMinioVeleroConfig, error) {
+	nfsStore, err := snapshot.BuildStoreNFS(ctx, clientset, namespace)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to build nfs store")
+	}
+
+	creds, err := snapshot.BuildAWSCredentials(nfsStore.AccessKeyID, nfsStore.SecretAccessKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to format credentials")
+	}
+
+	publicURL := fmt.Sprintf("http://%s:%d", nfsStore.ObjectStoreClusterIP, snapshot.NFSMinioServicePort)
+	s3URL := nfsStore.Endpoint
+	veleroCommand := fmt.Sprintf(`velero install \
+	--secret-file /path/to/credentials-file \
+	--provider aws \
+	--plugins velero/velero-plugin-for-aws:v1.1.0 \
+	--bucket velero \
+	--backup-location-config region=%s,s3ForcePathStyle=\"true\",s3Url=%s,publicUrl=%s \
+	--snapshot-location-config region=%s \
+	--use-restic`, snapshot.NFSMinioRegion, s3URL, publicURL, snapshot.NFSMinioRegion)
+
+	return &NFSMinioVeleroConfig{
+		Credentials:   string(creds),
+		VeleroCommand: veleroCommand,
+	}, nil
 }
 
 func promptForNFSReset(log *logger.Logger, warningMsg string) bool {

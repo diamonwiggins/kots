@@ -27,22 +27,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-type ConfigureNFSSnapshotsResponse struct {
-	Success              bool   `json:"success"`
-	Error                string `json:"error,omitempty"`
-	IsMinimalRBACEnabled bool   `json:"isMinimalRBACEnabled,omitempty"`
-}
-
-type ConfigureNFSSnapshotsRequest struct {
-	NFSOptions NFSOptions `json:"nfsOptions"`
-}
-
-type NFSOptions struct {
-	Path       string `json:"path"`
-	Server     string `json:"server"`
-	ForceReset bool   `json:"forceReset,omitempty"`
-}
-
 type GlobalSnapshotSettingsResponse struct {
 	VeleroVersion   string   `json:"veleroVersion"`
 	VeleroPlugins   []string `json:"veleroPlugins"`
@@ -71,6 +55,22 @@ type UpdateGlobalSnapshotSettingsRequest struct {
 	NFS      *NFSOptions                    `json:"nfs"`
 }
 
+type ConfigureNFSSnapshotsProviderResponse struct {
+	Success   bool   `json:"success"`
+	Error     string `json:"error,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+}
+
+type ConfigureNFSSnapshotsProviderRequest struct {
+	NFSOptions NFSOptions `json:"nfsOptions"`
+}
+
+type NFSOptions struct {
+	Path       string `json:"path"`
+	Server     string `json:"server"`
+	ForceReset bool   `json:"forceReset,omitempty"`
+}
+
 type SnapshotConfig struct {
 	AutoEnabled  bool                            `json:"autoEnabled"`
 	AutoSchedule *snapshottypes.SnapshotSchedule `json:"autoSchedule"`
@@ -79,149 +79,6 @@ type SnapshotConfig struct {
 
 type VeleroStatus struct {
 	IsVeleroInstalled bool `json:"isVeleroInstalled"`
-}
-
-func (h *Handler) ConfigureNFSSnapshots(w http.ResponseWriter, r *http.Request) {
-	response := ConfigureNFSSnapshotsResponse{
-		Success: false,
-	}
-
-	request := ConfigureNFSSnapshotsRequest{}
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		errMsg := "failed to decode request body"
-		logger.Error(errors.Wrap(err, errMsg))
-		response.Error = errMsg
-		JSON(w, http.StatusBadRequest, response)
-		return
-	}
-
-	clientset, err := k8s.Clientset()
-	if err != nil {
-		errMsg := "failed to get k8s client set"
-		response.Error = errMsg
-		logger.Error(errors.Wrap(err, errMsg))
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	// check if minimal rbac is enabled, if so, kotsadm won't have sufficient permissions
-	// to install velero, in this case, nfs & velero have to be installed/configured using the CLI
-
-	namespace := os.Getenv("POD_NAMESPACE")
-
-	isMinimalRBACEnabled := !k8sutil.IsKotsadmClusterScoped(r.Context(), clientset)
-	if isMinimalRBACEnabled {
-		response.IsMinimalRBACEnabled = true
-		JSON(w, http.StatusOK, response)
-		return
-	}
-
-	// TODO: do this asynchronously and use task status to report back
-	// deploy/configure nfs minio
-
-	if err := configureNFSMinio(r.Context(), clientset, &request.NFSOptions); err != nil {
-		if _, ok := errors.Cause(err).(*kotssnapshot.ResetNFSError); ok {
-			response.Error = err.Error()
-			JSON(w, http.StatusConflict, response)
-			return
-		}
-		errMsg := "failed to configure nfs minio"
-		response.Error = errMsg
-		logger.Error(errors.Wrap(err, errMsg))
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	// install/configure velero
-
-	registryOptions, err := kotsadm.GetKotsadmOptionsFromCluster(namespace, clientset)
-	if err != nil {
-		errMsg := "failed to get kotsadm options from cluster"
-		response.Error = errMsg
-		logger.Error(errors.Wrap(err, errMsg))
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	veleroNamespace, err := kotssnapshot.DetectVeleroNamespace()
-	if err != nil {
-		errMsg := "failed to detect velero namespace"
-		response.Error = errMsg
-		logger.Error(errors.Wrap(err, errMsg))
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	if veleroNamespace == "" {
-		// velero not found, install and configure velero using NFS store
-		if err := kotssnapshot.InstallVeleroFromStoreNFS(r.Context(), clientset, namespace, registryOptions, false); err != nil {
-			errMsg := "failed to install velero"
-			response.Error = errMsg
-			logger.Error(errors.Wrap(err, errMsg))
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		response.Success = true
-		response.IsMinimalRBACEnabled = false
-
-		JSON(w, http.StatusOK, response)
-		return
-	}
-
-	// velero is already installed, only configure velero images and the store
-
-	err = kotssnapshot.ConfigureVeleroImages(r.Context(), clientset, namespace, registryOptions)
-	if err != nil {
-		errMsg := "failed to configure velero images"
-		response.Error = errMsg
-		logger.Error(errors.Wrap(err, errMsg))
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	configureStoreOptions := kotssnapshot.ConfigureStoreOptions{
-		NFS:              true,
-		KotsadmNamespace: namespace,
-	}
-	_, err = kotssnapshot.ConfigureStore(configureStoreOptions)
-	if err != nil {
-		errMsg := "failed to configure store"
-		response.Error = errMsg
-		logger.Error(errors.Wrap(err, errMsg))
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	response.Success = true
-	response.IsMinimalRBACEnabled = false
-
-	JSON(w, http.StatusOK, response)
-}
-
-func configureNFSMinio(ctx context.Context, clientset kubernetes.Interface, opts *NFSOptions) error {
-	namespace := os.Getenv("POD_NAMESPACE")
-
-	registryOptions, err := kotsadm.GetKotsadmOptionsFromCluster(namespace, clientset)
-	if err != nil {
-		return errors.Wrap(err, "failed to get kotsadm options from cluster")
-	}
-
-	deployOptions := kotssnapshot.NFSDeployOptions{
-		Namespace:   namespace,
-		IsOpenShift: k8sutil.IsOpenShift(clientset),
-		ForceReset:  opts.ForceReset,
-		NFSConfig: kotssnapshottypes.NFSConfig{
-			Path:   opts.Path,
-			Server: opts.Server,
-		},
-		Wait: true,
-	}
-	if err := kotssnapshot.DeployNFSMinio(ctx, clientset, deployOptions, registryOptions); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (h *Handler) UpdateGlobalSnapshotSettings(w http.ResponseWriter, r *http.Request) {
@@ -257,7 +114,7 @@ func (h *Handler) UpdateGlobalSnapshotSettings(w http.ResponseWriter, r *http.Re
 	globalSnapshotSettingsResponse.IsKurl = kurl.IsKurl()
 
 	if updateGlobalSnapshotSettingsRequest.NFS != nil {
-		// make sure NFS Minio is configured and deployed first
+		// make sure NFS provider is configured and deployed first
 		clientset, err := k8s.Clientset()
 		if err != nil {
 			err = errors.Wrap(err, "failed to get k8s client set")
@@ -265,13 +122,13 @@ func (h *Handler) UpdateGlobalSnapshotSettings(w http.ResponseWriter, r *http.Re
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		if err := configureNFSMinio(r.Context(), clientset, updateGlobalSnapshotSettingsRequest.NFS); err != nil {
+		if err := configureNFSProvider(r.Context(), clientset, updateGlobalSnapshotSettingsRequest.NFS); err != nil {
 			if _, ok := errors.Cause(err).(*kotssnapshot.ResetNFSError); ok {
 				globalSnapshotSettingsResponse.Error = err.Error()
 				JSON(w, http.StatusConflict, globalSnapshotSettingsResponse)
 				return
 			}
-			err = errors.Wrap(err, "failed to configure nfs minio")
+			err = errors.Wrap(err, "failed to configure nfs provider")
 			logger.Error(err)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -377,6 +234,84 @@ func (h *Handler) GetGlobalSnapshotSettings(w http.ResponseWriter, r *http.Reque
 	globalSnapshotSettingsResponse.Success = true
 
 	JSON(w, http.StatusOK, globalSnapshotSettingsResponse)
+}
+
+func (h *Handler) ConfigureNFSSnapshotsProvider(w http.ResponseWriter, r *http.Request) {
+	response := ConfigureNFSSnapshotsProviderResponse{
+		Success: false,
+	}
+
+	request := ConfigureNFSSnapshotsProviderRequest{}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		errMsg := "failed to decode request body"
+		logger.Error(errors.Wrap(err, errMsg))
+		response.Error = errMsg
+		JSON(w, http.StatusBadRequest, response)
+		return
+	}
+
+	clientset, err := k8s.Clientset()
+	if err != nil {
+		errMsg := "failed to get k8s client set"
+		response.Error = errMsg
+		logger.Error(errors.Wrap(err, errMsg))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	// TODO: do this asynchronously and use task status to report back
+
+	if err := configureNFSProvider(r.Context(), clientset, &request.NFSOptions); err != nil {
+		if _, ok := errors.Cause(err).(*kotssnapshot.ResetNFSError); ok {
+			response.Error = err.Error()
+			JSON(w, http.StatusConflict, response)
+			return
+		}
+		errMsg := "failed to configure nfs provider"
+		response.Error = errMsg
+		logger.Error(errors.Wrap(err, errMsg))
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+
+	response.Success = true
+	response.Namespace = os.Getenv("POD_NAMESPACE")
+
+	JSON(w, http.StatusOK, response)
+}
+
+func configureNFSProvider(ctx context.Context, clientset kubernetes.Interface, opts *NFSOptions) error {
+	namespace := os.Getenv("POD_NAMESPACE")
+
+	registryOptions, err := kotsadm.GetKotsadmOptionsFromCluster(namespace, clientset)
+	if err != nil {
+		return errors.Wrap(err, "failed to get kotsadm options from cluster")
+	}
+
+	deployOptions := kotssnapshot.NFSDeployOptions{
+		Namespace:   namespace,
+		IsOpenShift: k8sutil.IsOpenShift(clientset),
+		ForceReset:  opts.ForceReset,
+		NFSConfig: kotssnapshottypes.NFSConfig{
+			Path:   opts.Path,
+			Server: opts.Server,
+		},
+	}
+	if err := kotssnapshot.DeployNFSMinio(ctx, clientset, deployOptions, registryOptions); err != nil {
+		return err
+	}
+
+	err = k8sutil.WaitForDeploymentReady(ctx, clientset, namespace, kotssnapshot.NFSMinioDeploymentName, time.Minute*3)
+	if err != nil {
+		return errors.Wrap(err, "failed to wait for nfs minio")
+	}
+
+	err = kotssnapshot.CreateNFSMinioBucket(ctx, clientset, namespace)
+	if err != nil {
+		return errors.Wrap(err, "failed to create default bucket")
+	}
+
+	return nil
 }
 
 func (h *Handler) GetSnapshotConfig(w http.ResponseWriter, r *http.Request) {

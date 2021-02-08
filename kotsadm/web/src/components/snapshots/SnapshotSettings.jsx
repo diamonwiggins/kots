@@ -26,10 +26,11 @@ class SnapshotSettings extends Component {
     showResetNFSWarningModal: false,
     resetNFSWarningMessage: "",
 
-    configuringNFS: false,
-    configureNFSErrorMsg: "",
-    showConfigureNFSMinimalRBACModal: false,
-    showConfigureNFSModal: false,
+    configuringNFSProviderProvider: false,
+    configureNFSProviderErrorMsg: "",
+    configureNFSProviderNamespace: "",
+    showConfigureNFSProviderNextStepsModal: false,
+    showConfigureNFSProviderModal: false,
   };
 
   fetchSnapshotSettings = (isCheckForVelero) => {
@@ -150,8 +151,8 @@ class SnapshotSettings extends Component {
       });
   }
 
-  configureNFS = (path, server, forceReset = false) => {
-    this.setState({ configuringNFS: true, configureNFSErrorMsg: "" });
+  configureNFSProvider = (path, server, forceReset = false) => {
+    this.setState({ configuringNFSProvider: true, configureNFSProviderErrorMsg: "" });
 
     fetch(`${window.env.API_ENDPOINT}/snapshots/nfs`, {
       method: "PUT",
@@ -171,7 +172,7 @@ class SnapshotSettings extends Component {
         if (res.status === 409) {
           const response = await res.json();
           this.setState({
-            configuringNFS: false,
+            configuringNFSProvider: false,
             showResetNFSWarningModal: true,
             resetNFSWarningMessage: response.error,
           })
@@ -181,49 +182,33 @@ class SnapshotSettings extends Component {
         const response = await res.json();
         if (!res.ok) {
           this.setState({
-            configuringNFS: false,
-            configureNFSErrorMsg: response.error
+            configuringNFSProvider: false,
+            configureNFSProviderErrorMsg: response.error
           });
           return;
         }
 
         if (response.success) {
           this.setState({
-            configuringNFS: false,
-            showConfigureNFSModal: false,
-            configureNFSErrorMsg: "",
-            updateConfirm: true,
-          });
-
-          this.toggleConfigureModal();
-          await this.fetchSnapshotSettings();
-
-          setTimeout(() => {
-            this.setState({ updateConfirm: false })
-          }, 6000);
-          return;
-        }
-
-        if (response.isMinimalRBACEnabled) {
-          this.setState({
-            configuringNFS: false,
-            showConfigureNFSModal: false,
-            showConfigureNFSMinimalRBACModal: true,
-            configureNFSErrorMsg: "",
+            configuringNFSProvider: false,
+            showConfigureNFSProviderModal: false,
+            showConfigureNFSProviderNextStepsModal: true,
+            configureNFSProviderErrorMsg: "",
+            configureNFSProviderNamespace: response.namespace,
           });
           return;
         }
 
         this.setState({
-          configuringNFS: false,
-          configureNFSErrorMsg: response.error
+          configuringNFSProvider: false,
+          configureNFSProviderErrorMsg: response.error
         });
       })
       .catch((err) => {
         console.error(err);
         this.setState({
-          configuringNFS: false,
-          configureNFSErrorMsg: "Something went wrong, please try again."
+          configuringNFSProvider: false,
+          configureNFSProviderErrorMsg: "Something went wrong, please try again."
         });
       });
   }
@@ -248,12 +233,12 @@ class SnapshotSettings extends Component {
     this.setState({ showResetNFSWarningModal: false });
   };
 
-  toggleConfigureNFSModal = () => {
-    this.setState({ showConfigureNFSModal: !this.state.showConfigureNFSModal });
+  toggleConfigureNFSProviderModal = () => {
+    this.setState({ showConfigureNFSProviderModal: !this.state.showConfigureNFSProviderModal });
   };
   
-  hideConfigureNFSMinimalRBACModal = () => {
-    this.setState({ showConfigureNFSMinimalRBACModal: false });
+  hideConfigureNFSProviderNextStepsModal = () => {
+    this.setState({ showConfigureNFSProviderNextStepsModal: false });
   };
 
   render() {
@@ -296,18 +281,20 @@ class SnapshotSettings extends Component {
             isLicenseUpload={isLicenseUpload}
             configureSnapshotsModal={this.state.configureSnapshotsModal}
             toggleConfigureModal={this.toggleConfigureModal}
+            isKurlEnabled={this.props.isKurlEnabled}
 
             showResetNFSWarningModal={this.state.showResetNFSWarningModal}
             resetNFSWarningMessage={this.state.resetNFSWarningMessage}
             hideResetNFSWarningModal={this.hideResetNFSWarningModal}
 
-            configureNFS={this.configureNFS}
-            configuringNFS={this.state.configuringNFS}
-            configureNFSErrorMsg={this.state.configureNFSErrorMsg}
-            showConfigureNFSModal={this.state.showConfigureNFSModal}
-            toggleConfigureNFSModal={this.toggleConfigureNFSModal}
-            showConfigureNFSMinimalRBACModal={this.state.showConfigureNFSMinimalRBACModal}
-            hideConfigureNFSMinimalRBACModal={this.hideConfigureNFSMinimalRBACModal}
+            configureNFSProvider={this.configureNFSProvider}
+            configuringNFSProvider={this.state.configuringNFSProvider}
+            configureNFSProviderErrorMsg={this.state.configureNFSProviderErrorMsg}
+            configureNFSProviderNamespace={this.state.configureNFSProviderNamespace}
+            showConfigureNFSProviderModal={this.state.showConfigureNFSProviderModal}
+            toggleConfigureNFSProviderModal={this.toggleConfigureNFSProviderModal}
+            showConfigureNFSProviderNextStepsModal={this.state.showConfigureNFSProviderNextStepsModal}
+            hideConfigureNFSProviderNextStepsModal={this.hideConfigureNFSProviderNextStepsModal}
           />
         </div>
       </div>

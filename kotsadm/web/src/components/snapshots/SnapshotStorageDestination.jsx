@@ -6,6 +6,7 @@ import find from "lodash/find";
 import Modal from "react-modal";
 
 import ConfigureSnapshots from "./ConfigureSnapshots";
+import CodeSnippet from "../shared/CodeSnippet";
 import Loader from "../shared/Loader";
 
 import "../../scss/components/shared/SnapshotForm.scss";
@@ -344,13 +345,13 @@ class SnapshotStorageDestination extends Component {
     await this.snapshotProviderNFS(true);
   }
 
-  configureNFS = async () => {
-    this.props.configureNFS(this.state.tmpNFSPath, this.state.tmpNFSServer)
+  configureNFSProvider = async () => {
+    this.props.configureNFSProvider(this.state.tmpNFSPath, this.state.tmpNFSServer)
   }
 
-  forceConfigureNFS = async () => {
+  forceConfigureNFSProvider = async () => {
     this.props.hideResetNFSWarningModal();
-    this.props.configureNFS(this.state.tmpNFSPath, this.state.tmpNFSServer, true)
+    this.props.configureNFSProvider(this.state.tmpNFSPath, this.state.tmpNFSServer, true)
   }
 
   getProviderPayload = (provider, bucket, path) => {
@@ -689,10 +690,12 @@ class SnapshotStorageDestination extends Component {
               value: "other",
               label: "Other S3-Compatible Storage",
             });
-            availableDestinations.push({
-              value: "internal",
-              label: "Internal Storage (Default)",
-            });
+            if (snapshotSettings.isKurl) {
+              availableDestinations.push({
+                value: "internal",
+                label: "Internal Storage (Default)",
+              });
+            }
             availableDestinations.push({
               value: "nfs",
               label: "Network File System - NFS",
@@ -794,13 +797,13 @@ class SnapshotStorageDestination extends Component {
             hideCheckVeleroButton={this.props.hideCheckVeleroButton}
             configureSnapshotsModal={this.props.configureSnapshotsModal}
             toggleConfigureModal={this.props.toggleConfigureModal}
-            toggleConfigureNFSModal={this.props.toggleConfigureNFSModal}
+            toggleConfigureNFSProviderModal={this.props.toggleConfigureNFSProviderModal}
           />}
 
-        {this.props.showConfigureNFSModal &&
+        {this.props.showConfigureNFSProviderModal &&
           <Modal
-            isOpen={this.props.showConfigureNFSModal}
-            onRequestClose={this.props.toggleConfigureNFSModal}
+            isOpen={this.props.showConfigureNFSProviderModal}
+            onRequestClose={this.props.toggleConfigureNFSProviderModal}
             shouldReturnFocusAfterClose={false}
             contentLabel="Configure NFS backend"
             ariaHideApp={false}
@@ -823,30 +826,37 @@ class SnapshotStorageDestination extends Component {
               </div>
               <div>
                 <div className="flex justifyContent--flexStart alignItems-center">
-                  {this.props.configuringNFS && <Loader className="u-marginRight--5" size="32" />}
-                  <button disabled={!this.state.tmpNFSServer || !this.state.tmpNFSPath || this.props.configuringNFS} type="button" className="btn blue primary u-marginRight--10" onClick={this.configureNFS}>{this.props.configuringNFS ? "Configuring" : "Configure"}</button>
-                  <button type="button" className="btn secondary" onClick={this.props.toggleConfigureNFSModal}>Cancel</button>
+                  {this.props.configuringNFSProvider && <Loader className="u-marginRight--5" size="32" />}
+                  <button disabled={!this.state.tmpNFSServer || !this.state.tmpNFSPath || this.props.configuringNFSProvider} type="button" className="btn blue primary u-marginRight--10" onClick={this.configureNFSProvider}>{this.props.configuringNFSProvider ? "Configuring" : "Configure"}</button>
+                  <button type="button" className="btn secondary" onClick={this.props.toggleConfigureNFSProviderModal}>Cancel</button>
                 </div>
-                {this.props.configureNFSErrorMsg && <div className="flex u-fontWeight--bold u-fontSize--small u-color--red u-marginBottom--10 u-marginTop--10">{this.props.configureNFSErrorMsg}</div>}
+                {this.props.configureNFSProviderErrorMsg && <div className="flex u-fontWeight--bold u-fontSize--small u-color--red u-marginBottom--10 u-marginTop--10">{this.props.configureNFSProviderErrorMsg}</div>}
               </div>
             </div>
           </Modal>
         }
 
-        {this.props.showConfigureNFSMinimalRBACModal &&
+        {this.props.showConfigureNFSProviderNextStepsModal &&
           <Modal
-            isOpen={this.props.showConfigureNFSMinimalRBACModal}
-            onRequestClose={this.props.hideConfigureNFSMinimalRBACModal}
+            isOpen={this.props.showConfigureNFSProviderNextStepsModal}
+            onRequestClose={this.props.hideConfigureNFSProviderNextStepsModal}
             shouldReturnFocusAfterClose={false}
             contentLabel="NFS next steps"
             ariaHideApp={false}
             className="Modal SmallSize"
           >
             <div className="Modal-body">
-              <p className="u-fontSize--largest u-fontWeight--bold u-color--tundora u-marginBottom--10">Minimal RBAC Support</p>
-              <p className="u-fontSize--normal u-fontWeight--normal u-color--dustyGray u-lineHeight--normal u-marginBottom--10"> We apologize, but we've detected that the Admin Console is running with minimal RBAC privileges. Currently, the snapshots functionality requires that the Admin Console has cluster-scoped access. </p>
-              <div className="u-marginTop--20 flex justifyContent--flexStart">
-                <button type="button" className="btn blue primary" onClick={this.props.hideConfigureNFSMinimalRBACModal}>Ok, got it!</button>
+              <p className="u-fontSize--largest u-fontWeight--bold u-color--tundora u-marginBottom--10">NFS - Next steps</p>
+              <p className="u-fontSize--normal u-fontWeight--normal u-color--dustyGray u-lineHeight--normal"> Run the following command for instructions on how to up Velero: </p>
+              <CodeSnippet
+                language="bash"
+                canCopy={true}
+                onCopyText={<span className="u-color--chateauGreen">Command has been copied to your clipboard</span>}
+              >
+                {`kubectl kots backup print-nfs-config --namespace ${this.props.configureNFSProviderNamespace}`}
+              </CodeSnippet>
+              <div className="u-marginTop--10 flex justifyContent--flexStart">
+                <button type="button" className="btn blue primary" onClick={this.props.hideConfigureNFSProviderNextStepsModal}>Ok, got it!</button>
               </div>
             </div>
           </Modal>
@@ -864,7 +874,7 @@ class SnapshotStorageDestination extends Component {
             <div className="Modal-body">
               <p className="u-fontSize--large u-color--chestnut u-marginBottom--20">{this.props.resetNFSWarningMessage} Would you like to continue?</p>
               <div className="u-marginTop--10 flex justifyContent--flexStart">
-                <button type="button" className="btn blue primary u-marginRight--10" onClick={this.props.showConfigureNFSModal ? this.forceConfigureNFS : this.forceSnapshotProviderNFS}>Yes</button>
+                <button type="button" className="btn blue primary u-marginRight--10" onClick={this.props.showConfigureNFSProviderModal ? this.forceConfigureNFSProvider : this.forceSnapshotProviderNFS}>Yes</button>
                 <button type="button" className="btn secondary" onClick={this.props.hideResetNFSWarningModal}>No</button>
               </div>
             </div>

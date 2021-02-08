@@ -853,12 +853,12 @@ var HandlerPolicyTests = map[string][]HandlerPolicyTest{
 			ExpectStatus: http.StatusOK,
 		},
 	},
-	"ConfigureNFSSnapshots": {
+	"ConfigureNFSSnapshotsProvider": {
 		{
 			Roles:        []rbactypes.Role{rbac.ClusterAdminRole},
 			SessionRoles: []string{rbac.ClusterAdminRoleID},
 			Calls: func(storeRecorder *mock_store.MockKOTSStoreMockRecorder, handlerRecorder *mock_handlers.MockKOTSHandlerMockRecorder) {
-				handlerRecorder.ConfigureNFSSnapshots(gomock.Any(), gomock.Any())
+				handlerRecorder.ConfigureNFSSnapshotsProvider(gomock.Any(), gomock.Any())
 			},
 			ExpectStatus: http.StatusOK,
 		},

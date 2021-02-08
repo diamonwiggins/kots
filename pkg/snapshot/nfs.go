@@ -10,6 +10,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
+	"github.com/aws/aws-sdk-go/aws/credentials"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/replicatedhq/kots/pkg/k8sutil"
@@ -43,8 +48,6 @@ type NFSDeployOptions struct {
 	IsOpenShift bool
 	ForceReset  bool
 	NFSConfig   types.NFSConfig
-	// if Wait is set to false, a default bucket will not be created
-	Wait bool
 }
 
 type ResetNFSError struct {
@@ -106,13 +109,6 @@ func DeployNFSMinio(ctx context.Context, clientset kubernetes.Interface, deployO
 	}
 	if err := ensureNFSMinioService(ctx, clientset, deployOptions.Namespace); err != nil {
 		return errors.Wrap(err, "failed to ensure service")
-	}
-
-	if deployOptions.Wait {
-		err := k8sutil.WaitForDeploymentReady(ctx, clientset, deployOptions.Namespace, NFSMinioDeploymentName, time.Minute*2)
-		if err != nil {
-			return errors.Wrap(err, "failed to wait for nfs minio deployment to be ready")
-		}
 	}
 
 	return nil
@@ -707,6 +703,56 @@ func nfsMinioConfigPod(clientset kubernetes.Interface, deployOptions NFSDeployOp
 
 func getNFSResetWarningMsg(nfsPath string) string {
 	return fmt.Sprintf("The %s directory was previously configured by a different minio instance.\nProceeding will re-configure it to be used only by this new minio instance, and any other minio instance using this location will no longer have access.\nIf you are attempting to fully restore a prior installation, such as a disaster recovery scenario, this action is expected.", nfsPath)
+}
+
+func CreateNFSMinioBucket(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
+	secret, err := clientset.CoreV1().Secrets(namespace).Get(ctx, NFSMinioSecretName, metav1.GetOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to get nfs minio secret")
+	}
+
+	service, err := clientset.CoreV1().Services(namespace).Get(ctx, NFSMinioServiceName, metav1.GetOptions{})
+	if err != nil {
+		return errors.Wrap(err, "failed to get nfs minio service")
+	}
+
+	endpoint := fmt.Sprintf("http://%s:%d", service.Spec.ClusterIP, service.Spec.Ports[0].Port)
+	accessKeyID := string(secret.Data["MINIO_ACCESS_KEY"])
+	secretAccessKey := string(secret.Data["MINIO_SECRET_KEY"])
+
+	s3Config := &aws.Config{
+		Region:           aws.String(NFSMinioRegion),
+		Endpoint:         aws.String(endpoint),
+		DisableSSL:       aws.Bool(true), // TODO: this needs to be configurable
+		S3ForcePathStyle: aws.Bool(true),
+	}
+
+	if accessKeyID != "" && secretAccessKey != "" {
+		s3Config.Credentials = credentials.NewStaticCredentials(accessKeyID, secretAccessKey, "")
+	}
+
+	newSession := session.New(s3Config)
+	s3Client := s3.New(newSession)
+
+	_, err = s3Client.HeadBucket(&s3.HeadBucketInput{
+		Bucket: aws.String(NFSMinioBucketName),
+	})
+
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			if aerr.Code() == "NotFound" {
+				_, err = s3Client.CreateBucket(&s3.CreateBucketInput{
+					Bucket: aws.String(NFSMinioBucketName),
+				})
+				if err != nil {
+					return errors.Wrap(err, "failed to create bucket")
+				}
+			}
+		}
+		return errors.Wrap(err, "failed to check if bucket exists")
+	}
+
+	return nil
 }
 
 func GetCurrentNFSConfig(ctx context.Context, namespace string) (*types.NFSConfig, error) {

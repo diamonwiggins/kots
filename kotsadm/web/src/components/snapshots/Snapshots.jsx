@@ -301,6 +301,7 @@ class Snapshots extends Component {
 
   render() {
     const { isLoadingSnapshotSettings, snapshotSettings, hasSnapshotsLoaded, startingSnapshot, startSnapshotErr, startSnapshotErrorMsg, snapshots, isStartButtonClicked } = this.state;
+    const { isKurlEnabled } = this.props;
     const inProgressSnapshotExist = snapshots?.find(snapshot => snapshot.status === "InProgress");
 
     if (isLoadingSnapshotSettings && !hasSnapshotsLoaded) {
@@ -311,6 +312,7 @@ class Snapshots extends Component {
       )
     }
 
+    const isInternalStore = snapshotSettings?.store?.internal;
     const isVeleroCorrectVersion = snapshotSettings?.isVeleroRunning && snapshotSettings?.veleroVersion.includes("v1.5");
     const snapshotApp = this.props.appsList?.find(app => app.allowSnapshots);
 
@@ -337,7 +339,11 @@ class Snapshots extends Component {
               <p className="u-fontSize--small u-fontWeight--normal u-lineHeight--normal u-color--doveGray u-marginTop--5">
                 If you only need a partial backup of just application volumes and manifests for rollbacks, <Link to={`/app/${snapshotApp?.slug}/snapshots`} className="replicated-link u-fontSize--small">use Application Snapshots</Link>.
               </p>
-              <p className="u-fontSize--normal u-fontWeight--medium u-lineHeight--normal u-color--jaffa u-marginTop--20"> Instance snapshots with internal storage may result in data loss.  Please configure external storage. </p>
+              {isInternalStore && isKurlEnabled ?
+                <p className="u-fontSize--normal u-fontWeight--medium u-lineHeight--normal u-color--jaffa u-marginTop--20"> Instance snapshots with internal storage may result in data loss.  Please configure external storage. </p>
+                :
+                null
+              }
             </div>
           </div>
           <div className="AppSnapshots--wrapper flex1 flex-column u-width--full">

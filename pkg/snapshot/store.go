@@ -16,7 +16,6 @@ import (
 	"github.com/Azure/go-autorest/autorest/adal"
 	"github.com/Azure/go-autorest/autorest/azure"
 	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/ec2rolecreds"
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
@@ -205,32 +204,45 @@ func ConfigureStore(options ConfigureStoreOptions) (*types.Store, error) {
 			return nil, &InvalidStoreDataError{Message: "access key, secret key, endpoint and region are required"}
 		}
 	} else if options.Internal {
+		cfg, err := config.GetConfig()
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get cluster config")
+		}
+		clientset, err := kubernetes.NewForConfig(cfg)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create clientset")
+		}
+
+		if !kotsutil.IsKurl(clientset) {
+			return nil, &InvalidStoreDataError{Message: "cannot use internal storage on a non-kurl cluster"}
+		}
+
+		if store.Internal == nil {
+			store.Internal = &types.StoreInternal{}
+		}
 		store.AWS = nil
 		store.Google = nil
 		store.Azure = nil
 		store.Other = nil
 		store.NFS = nil
 
+		secret, err := kotsutil.GetKurlS3Secret()
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to get s3 secret")
+		}
+		if secret == nil {
+			return nil, errors.New("s3 secret does not exist")
+		}
+
 		store.Provider = "aws"
+		store.Bucket = string(secret.Data["velero-local-bucket"])
 		store.Path = ""
 
-		cfg, err := config.GetConfig()
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to get cluster config")
-		}
-
-		clientset, err := kubernetes.NewForConfig(cfg)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create clientset")
-		}
-
-		storeInternal, bucketName, err := buildStoreInternal(context.TODO(), clientset, options.KotsadmNamespace)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to build internal store")
-		}
-
-		store.Internal = storeInternal
-		store.Bucket = bucketName
+		store.Internal.AccessKeyID = string(secret.Data["access-key-id"])
+		store.Internal.SecretAccessKey = string(secret.Data["secret-access-key"])
+		store.Internal.Endpoint = string(secret.Data["endpoint"])
+		store.Internal.ObjectStoreClusterIP = string(secret.Data["object-store-cluster-ip"])
+		store.Internal.Region = "us-east-1"
 
 	} else if options.NFS {
 		store.AWS = nil
@@ -253,18 +265,18 @@ func ConfigureStore(options ConfigureStoreOptions) (*types.Store, error) {
 			return nil, errors.Wrap(err, "failed to create clientset")
 		}
 
-		storeNFS, err := buildStoreNFS(context.TODO(), clientset, options.KotsadmNamespace)
+		storeNFS, err := BuildStoreNFS(context.TODO(), clientset, options.KotsadmNamespace)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to build nfs store")
 		}
 		store.NFS = storeNFS
 	}
 
-	if err := validateStore(store, options.KotsadmNamespace); err != nil {
+	if err := validateStore(store); err != nil {
 		return nil, &InvalidStoreDataError{Message: errors.Cause(err).Error()}
 	}
 
-	updatedBackupStorageLocation, err := updateGlobalStore(store, options.KotsadmNamespace)
+	updatedBackupStorageLocation, err := updateGlobalStore(store)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to update global store")
 	}
@@ -291,7 +303,7 @@ func ConfigureStore(options ConfigureStoreOptions) (*types.Store, error) {
 }
 
 // updateGlobalStore will update the in-cluster storage with exactly what's in the store param
-func updateGlobalStore(store *types.Store, kotsadmNamespace string) (*velerov1.BackupStorageLocation, error) {
+func updateGlobalStore(store *types.Store) (*velerov1.BackupStorageLocation, error) {
 	cfg, err := config.GetConfig()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get cluster config")
@@ -340,7 +352,7 @@ func updateGlobalStore(store *types.Store, kotsadmNamespace string) (*velerov1.B
 				}
 			}
 		} else {
-			awsCredentials, err := buildAWSCredentials(store.AWS.AccessKeyID, store.AWS.SecretAccessKey)
+			awsCredentials, err := BuildAWSCredentials(store.AWS.AccessKeyID, store.AWS.SecretAccessKey)
 			if err != nil {
 				return nil, errors.Wrap(err, "failed to format aws credentials")
 			}
@@ -385,7 +397,7 @@ func updateGlobalStore(store *types.Store, kotsadmNamespace string) (*velerov1.B
 			"s3ForcePathStyle": "true",
 		}
 
-		otherCredentials, err := buildAWSCredentials(store.Other.AccessKeyID, store.Other.SecretAccessKey)
+		otherCredentials, err := BuildAWSCredentials(store.Other.AccessKeyID, store.Other.SecretAccessKey)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to format other credentials")
 		}
@@ -426,11 +438,11 @@ func updateGlobalStore(store *types.Store, kotsadmNamespace string) (*velerov1.B
 		kotsadmVeleroBackendStorageLocation.Spec.Config = map[string]string{
 			"region":           store.Internal.Region,
 			"s3Url":            store.Internal.Endpoint,
-			"publicUrl":        getStoreInternalPublicURL(clientset, store.Internal, kotsadmNamespace),
+			"publicUrl":        fmt.Sprintf("http://%s", store.Internal.ObjectStoreClusterIP),
 			"s3ForcePathStyle": "true",
 		}
 
-		internalCredentials, err := buildAWSCredentials(store.Internal.AccessKeyID, store.Internal.SecretAccessKey)
+		internalCredentials, err := BuildAWSCredentials(store.Internal.AccessKeyID, store.Internal.SecretAccessKey)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to format internal credentials")
 		}
@@ -475,7 +487,7 @@ func updateGlobalStore(store *types.Store, kotsadmNamespace string) (*velerov1.B
 			"s3ForcePathStyle": "true",
 		}
 
-		nfsCredentials, err := buildAWSCredentials(store.NFS.AccessKeyID, store.NFS.SecretAccessKey)
+		nfsCredentials, err := BuildAWSCredentials(store.NFS.AccessKeyID, store.NFS.SecretAccessKey)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed to format nfs credentials")
 		}
@@ -780,31 +792,12 @@ func mapAWSBackupStorageLocationToStore(kotsadmVeleroBackendStorageLocation *vel
 		return nil
 	}
 
+	// check if using nfs store
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return errors.Wrap(err, "failed to parse s3 url")
 	}
 	serviceName := strings.Split(u.Hostname(), ".")[0]
-
-	// check if using kotsadm minio (existing cluster internal store)
-	if u.Scheme == "http" && serviceName == "kotsadm-minio" {
-		publicURL, ok := kotsadmVeleroBackendStorageLocation.Spec.Config["publicUrl"]
-		if !ok {
-			return errors.New("public url for internal store not found")
-		}
-		u, err := url.Parse(publicURL)
-		if err != nil {
-			return errors.Wrap(err, "failed to parse public url for internal store")
-		}
-		store.Internal = &types.StoreInternal{
-			Region:               kotsadmVeleroBackendStorageLocation.Spec.Config["region"],
-			Endpoint:             endpoint,
-			ObjectStoreClusterIP: u.Hostname(),
-		}
-		return nil
-	}
-
-	// check if using nfs store
 	if u.Scheme == "http" && serviceName == NFSMinioServiceName {
 		publicURL, ok := kotsadmVeleroBackendStorageLocation.Spec.Config["publicUrl"]
 		if !ok {
@@ -855,7 +848,7 @@ func FindBackupStoreLocation() (*velerov1.BackupStorageLocation, error) {
 	return nil, errors.New("global config not found")
 }
 
-func buildAWSCredentials(accessKeyID, secretAccessKey string) ([]byte, error) {
+func BuildAWSCredentials(accessKeyID, secretAccessKey string) ([]byte, error) {
 	awsCfg := ini.Empty()
 	section, err := awsCfg.NewSection("default")
 	if err != nil {
@@ -884,50 +877,7 @@ func buildAWSCredentials(accessKeyID, secretAccessKey string) ([]byte, error) {
 	return awsCredentials.Bytes(), nil
 }
 
-func buildStoreInternal(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string) (*types.StoreInternal, string, error) {
-	if kotsutil.IsKurl(clientset) && kotsadmNamespace == metav1.NamespaceDefault {
-		secret, err := kotsutil.GetKurlS3Secret()
-		if err != nil {
-			return nil, "", errors.Wrap(err, "failed to get s3 secret")
-		}
-		if secret == nil {
-			return nil, "", errors.New("s3 secret does not exist")
-		}
-
-		kurlOjectStore := types.StoreInternal{}
-		kurlOjectStore.AccessKeyID = string(secret.Data["access-key-id"])
-		kurlOjectStore.SecretAccessKey = string(secret.Data["secret-access-key"])
-		kurlOjectStore.Endpoint = string(secret.Data["endpoint"])
-		kurlOjectStore.ObjectStoreClusterIP = string(secret.Data["object-store-cluster-ip"])
-		kurlOjectStore.Region = "us-east-1"
-
-		return &kurlOjectStore, string(secret.Data["velero-local-bucket"]), nil
-	}
-
-	secret, err := clientset.CoreV1().Secrets(kotsadmNamespace).Get(ctx, "kotsadm-minio", metav1.GetOptions{})
-	if err != nil {
-		return nil, "", errors.Wrap(err, "failed to get kotsadm minio secret")
-	}
-
-	service, err := clientset.CoreV1().Services(kotsadmNamespace).Get(ctx, "kotsadm-minio", metav1.GetOptions{})
-	if err != nil {
-		return nil, "", errors.Wrap(err, "failed to get kotsadm minio service")
-	}
-
-	region := "minio"
-	bucketName := "velero"
-
-	kotsadmMinioS3Store := types.StoreInternal{}
-	kotsadmMinioS3Store.AccessKeyID = string(secret.Data["accesskey"])
-	kotsadmMinioS3Store.SecretAccessKey = string(secret.Data["secretkey"])
-	kotsadmMinioS3Store.Endpoint = fmt.Sprintf("http://%s.%s:%d", service.ObjectMeta.Name, kotsadmNamespace, service.Spec.Ports[0].Port)
-	kotsadmMinioS3Store.ObjectStoreClusterIP = service.Spec.ClusterIP
-	kotsadmMinioS3Store.Region = region
-
-	return &kotsadmMinioS3Store, bucketName, nil
-}
-
-func buildStoreNFS(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string) (*types.StoreNFS, error) {
+func BuildStoreNFS(ctx context.Context, clientset kubernetes.Interface, kotsadmNamespace string) (*types.StoreNFS, error) {
 	secret, err := clientset.CoreV1().Secrets(kotsadmNamespace).Get(ctx, NFSMinioSecretName, metav1.GetOptions{})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get nfs minio secret")
@@ -948,18 +898,11 @@ func buildStoreNFS(ctx context.Context, clientset kubernetes.Interface, kotsadmN
 	return &storeNFS, nil
 }
 
-func getStoreInternalPublicURL(clientset kubernetes.Interface, storeInternal *types.StoreInternal, kotsadmNamespace string) string {
-	if kotsutil.IsKurl(clientset) && kotsadmNamespace == metav1.NamespaceDefault {
-		return fmt.Sprintf("http://%s", storeInternal.ObjectStoreClusterIP)
-	}
-	return fmt.Sprintf("http://%s:9000", storeInternal.ObjectStoreClusterIP)
-}
-
 func getStoreNFSPublicURL(storeNFS *types.StoreNFS) string {
 	return fmt.Sprintf("http://%s:%d", storeNFS.ObjectStoreClusterIP, NFSMinioServicePort)
 }
 
-func validateStore(store *types.Store, kotsadmNamespace string) error {
+func validateStore(store *types.Store) error {
 	if store.AWS != nil {
 		if err := validateAWS(store.AWS, store.Bucket); err != nil {
 			return errors.Wrap(err, "failed to validate AWS configuration")
@@ -989,7 +932,7 @@ func validateStore(store *types.Store, kotsadmNamespace string) error {
 	}
 
 	if store.Internal != nil {
-		if err := validateInternal(store.Internal, store.Bucket, kotsadmNamespace); err != nil {
+		if err := validateInternal(store.Internal, store.Bucket); err != nil {
 			return errors.Wrap(err, "failed to validate Internal configuration")
 		}
 		return nil
@@ -1153,63 +1096,56 @@ func validateOther(storeOther *types.StoreOther, bucket string) error {
 	return nil
 }
 
-// validateInternal will validate that the internal store is reachable and will also ensure that the bucket exists
-func validateInternal(storeInternal *types.StoreInternal, bucket string, kotsadmNamespace string) error {
-	cfg, err := config.GetConfig()
-	if err != nil {
-		return errors.Wrap(err, "failed to get cluster config")
-	}
-
-	clientset, err := kubernetes.NewForConfig(cfg)
-	if err != nil {
-		return errors.Wrap(err, "failed to create clientset")
-	}
-
-	// we use publicUrl instead of endpoint since it has to be reachable from the CLI too
-	publicURL := getStoreInternalPublicURL(clientset, storeInternal, kotsadmNamespace)
-
-	return createS3Bucket(publicURL, storeInternal.Region, storeInternal.AccessKeyID, storeInternal.SecretAccessKey, bucket)
-}
-
-// validateNFS will validate that the NFS store is reachable and will also ensure that the bucket exists
-func validateNFS(storeNFS *types.StoreNFS, bucket string) error {
-	// we use publicUrl instead of endpoint since it has to be reachable from the CLI too
-	publicURL := getStoreNFSPublicURL(storeNFS)
-
-	return createS3Bucket(publicURL, storeNFS.Region, storeNFS.AccessKeyID, storeNFS.SecretAccessKey, bucket)
-}
-
-func createS3Bucket(endpoint, region, accessKeyID, secretAccessKey, bucketName string) error {
+func validateInternal(storeInternal *types.StoreInternal, bucket string) error {
 	s3Config := &aws.Config{
-		Region:           aws.String(region),
-		Endpoint:         aws.String(endpoint),
+		Region:           aws.String(storeInternal.Region),
+		Endpoint:         aws.String(storeInternal.Endpoint),
 		DisableSSL:       aws.Bool(true), // TODO: this needs to be configurable
 		S3ForcePathStyle: aws.Bool(true),
 	}
 
-	if accessKeyID != "" && secretAccessKey != "" {
-		s3Config.Credentials = credentials.NewStaticCredentials(accessKeyID, secretAccessKey, "")
+	if storeInternal.AccessKeyID != "" && storeInternal.SecretAccessKey != "" {
+		s3Config.Credentials = credentials.NewStaticCredentials(storeInternal.AccessKeyID, storeInternal.SecretAccessKey, "")
 	}
 
 	newSession := session.New(s3Config)
 	s3Client := s3.New(newSession)
 
 	_, err := s3Client.HeadBucket(&s3.HeadBucketInput{
-		Bucket: aws.String(bucketName),
+		Bucket: aws.String(bucket),
 	})
 
 	if err != nil {
-		if aerr, ok := err.(awserr.Error); ok {
-			if aerr.Code() == "NotFound" {
-				_, err = s3Client.CreateBucket(&s3.CreateBucketInput{
-					Bucket: aws.String(bucketName),
-				})
-				if err != nil {
-					return errors.Wrap(err, "failed to create bucket")
-				}
-			}
-		}
-		return errors.Wrap(err, "failed to check if bucket exists")
+		return errors.Wrap(err, "bucket does not exist")
+	}
+
+	return nil
+}
+
+func validateNFS(storeNFS *types.StoreNFS, bucket string) error {
+	// we use publicUrl instead of endpoint since it has to be reachable from the CLI too
+	publicURL := getStoreNFSPublicURL(storeNFS)
+
+	s3Config := &aws.Config{
+		Region:           aws.String(storeNFS.Region),
+		Endpoint:         aws.String(publicURL),
+		DisableSSL:       aws.Bool(true), // TODO: this needs to be configurable
+		S3ForcePathStyle: aws.Bool(true),
+	}
+
+	if storeNFS.AccessKeyID != "" && storeNFS.SecretAccessKey != "" {
+		s3Config.Credentials = credentials.NewStaticCredentials(storeNFS.AccessKeyID, storeNFS.SecretAccessKey, "")
+	}
+
+	newSession := session.New(s3Config)
+	s3Client := s3.New(newSession)
+
+	_, err := s3Client.HeadBucket(&s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
+	})
+
+	if err != nil {
+		return errors.Wrap(err, "bucket does not exist")
 	}
 
 	return nil
