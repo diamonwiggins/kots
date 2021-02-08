@@ -116,6 +116,7 @@ func (h *Handler) ConfigureNFSSnapshots(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// TODO: do this asynchronously and use task status to report back
 	// deploy/configure nfs minio
 
 	if err := configureNFSMinio(r.Context(), clientset, &request.NFSOptions); err != nil {
