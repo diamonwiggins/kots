@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
+	kotsadmtypes "github.com/replicatedhq/kots/pkg/kotsadm/types"
 	kuberneteserrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -30,7 +31,7 @@ func WaitForDeploymentReady(ctx context.Context, clientset kubernetes.Interface,
 		time.Sleep(time.Second)
 
 		if time.Now().Sub(start) > timeout {
-			return errors.New("timeout waiting for deployment to become ready")
+			return &kotsadmtypes.ErrorTimeout{Message: "timeout waiting for deployment to become ready"}
 		}
 	}
 }
